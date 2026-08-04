@@ -6,6 +6,10 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B4E0000330310003001919E6 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = B4E0000230310002001919E6 /* MLXEmbedders */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		B431329F301A4059001919E6 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +31,11 @@
 			path = ToolRoutingStrategiesTests;
 			sourceTree = "<group>";
 		};
+		B431330430216776001919E6 /* Plan */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Plan;
+			sourceTree = "<group>";
+		};
 		B485BB7B30075EC80006AEB4 /* ToolRoutingStrategies */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ToolRoutingStrategies;
@@ -43,6 +52,7 @@
 		B485BB7630075EC80006AEB4 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				B4E0000330310003001919E6 /* MLXEmbedders in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -54,6 +64,7 @@
 				B485BB7B30075EC80006AEB4 /* ToolRoutingStrategies */,
 				B431329C301A4059001919E6 /* ToolRoutingStrategiesTests */,
 				B485BB7A30075EC80006AEB4 /* Products */,
+				B431330430216776001919E6 /* Plan */,
 			);
 			sourceTree = "<group>";
 		};
@@ -101,9 +112,13 @@
 			buildRules = (
 			);
 			fileSystemSynchronizedGroups = (
+				B431330430216776001919E6 /* Plan */,
 				B485BB7B30075EC80006AEB4 /* ToolRoutingStrategies */,
 			);
 			name = ToolRoutingStrategies;
+			packageProductDependencies = (
+				B4E0000230310002001919E6 /* MLXEmbedders */,
+			);
 			productName = ToolRoutingStrategies;
 			productReference = B485BB7930075EC80006AEB4 /* ToolRoutingStrategies.app */;
 			productType = "com.apple.product-type.application";
@@ -136,6 +151,9 @@
 			);
 			mainGroup = B485BB7030075EC80006AEB4;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B485BB7A30075EC80006AEB4 /* Products */;
 			projectDirPath = "";
@@ -435,6 +453,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
+			requirement = {
+				kind = exactVersion;
+				version = 2.31.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B4E0000230310002001919E6 /* MLXEmbedders */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXEmbedders;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B485BB7130075EC80006AEB4 /* Project object */;
 	validationLevel = 1;

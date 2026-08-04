@@ -15,6 +15,15 @@ struct ContentView: View {
             .navigationTitle("Bank Assistant Routing")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Picker("Routing strategy", selection: $viewModel.strategy) {
+                        ForEach(RoutingStrategy.allCases) { strategy in
+                            Text(strategy.rawValue).tag(strategy)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         isShowingTools = true

@@ -1,10 +1,13 @@
 /*
-Evaluations for the LLM-based tool router.
+Evaluations for the tool routers.
 
-The router does NOT execute tools — it returns the list of tools matching
+A router does NOT execute tools — it returns the list of tools matching
 the user's prompt. So the evaluation is purely quantitative: does the
 selected tool list match the expected list, and is the order right where
 the scenario demands a specific order (dependent chains)?
+
+The same dataset and metric grade every strategy (LLM, embedding,
+hybrid), so their Routing Accuracy numbers are directly comparable.
 */
 
 import Evaluations
@@ -28,15 +31,25 @@ struct RoutingSelection: Codable, Sendable {
 
 // MARK: - Evaluation
 
-/// Measures the tool-selection quality of `LLMRouter`.
+/// Measures the tool-selection quality of any `ToolRouter` strategy.
 struct ToolRoutingEvaluation: Evaluation {
+    /// Fresh router per sample so no state (a reused LLM session's
+    /// transcript, a warmed cache) can leak context between samples.
+    /// The MLX embedder's downloaded weights and the persisted tool
+    /// index are shared across instances, so this stays cheap.
+    let makeRouter: @Sendable @MainActor () -> any ToolRouter
+
     func subject(from sample: ModelSample<RoutingSelection>) async throws -> ModelSubject<RoutingSelection> {
-        // Fresh router per sample so the reused session's transcript
-        // can't leak context between samples.
-        let router = await LLMRouter()
+        let router = await makeRouter()
         do {
             let result = try await router.route(sample.promptDescription)
-            return ModelSubject(value: RoutingSelection(tools: result.calls.map(\.tool.displayName)))
+            // Abstain ("none", an empty selection) escalates to the
+            // backend in production (ToolRoutingViewModel), so grade it
+            // as the system outcome, not the router-internal value.
+            let tools = result.calls.isEmpty
+                ? ["send_to_backend"]
+                : result.calls.map(\.tool.displayName)
+            return ModelSubject(value: RoutingSelection(tools: tools))
         } catch is LanguageModelSession.GenerationError {
             // Mirror production (ToolRoutingViewModel): a routing failure —
             // e.g. a guardrail refusal — degrades to backend escalation,
@@ -234,28 +247,167 @@ struct ToolRoutingEvaluation: Evaluation {
     }
 }
 
+// MARK: - Retrieval Evaluation (embedder as Stage 1)
+
+/// The retrieved shortlist for one query. Unlike `RoutingSelection`,
+/// order NEVER matters here: retrieval is a similarity search, and the
+/// shortlist's ranking is confidence, not an execution plan.
+struct RetrievalSelection: Codable, Sendable {
+    /// Tool display names above the similarity threshold, best first.
+    var tools: [String]
+    /// Cosine similarity per tool, parallel to `tools`.
+    var scores: [Double] = []
+}
+
+/// Measures `MiniLMRouter.retrieve` in its hybrid Stage-1 role: for the
+/// tool-serviceable routing prompts, every tool the correct plan needs
+/// must appear in the top-k shortlist — order-free, extras are fine.
+/// This is the hybrid's hard ceiling: a tool missing here is
+/// unrecoverable downstream ("if the embedding model fails to retrieve
+/// the correct tool, the LLM never sees it").
+///
+/// Backend/action prompts are deliberately NOT in this dataset: an
+/// embedder cannot distinguish "freeze my card" from "show my card
+/// number" (topic similarity is all it sees), so escalation is graded
+/// only in the routing eval, and threshold abstention will be measured
+/// in the calibration exercise with genuinely off-topic samples.
+struct ToolRetrievalEvaluation: Evaluation {
+    let topK = 4
+
+    func subject(from sample: ModelSample<RetrievalSelection>) async throws -> ModelSubject<RetrievalSelection> {
+        let router = await MiniLMRouter()
+        let retrieved = try await router.retrieve(sample.promptDescription, topK: topK)
+        return ModelSubject(value: RetrievalSelection(
+            tools: retrieved.map(\.toolName),
+            scores: retrieved.map { Double($0.score) }
+        ))
+    }
+
+    // MARK: Dataset — tool-serviceable routing samples reshaped for
+    // retrieval: expected = deduplicated tool SET of the correct plan.
+
+    var dataset = ArrayLoader(samples: [
+        ModelSample(prompt: "What did I spend at Starbucks?", expected: RetrievalSelection(tools: ["search_transactions"])),
+        ModelSample(prompt: "Show my transactions from the last 5 days", expected: RetrievalSelection(tools: ["list_transactions"])),
+        ModelSample(prompt: "Find the nearest ATM", expected: RetrievalSelection(tools: ["get_location", "find_atm"])),
+        ModelSample(prompt: "Find ATMs in Chicago", expected: RetrievalSelection(tools: ["find_atm"])),
+        ModelSample(prompt: "How much is my savings balance in euros?", expected: RetrievalSelection(tools: ["account_balance", "convert_currency"])),
+        ModelSample(prompt: "Show my balance and this week's transactions", expected: RetrievalSelection(tools: ["account_balance", "list_transactions"])),
+        ModelSample(prompt: "Get my June and July statements for checking", expected: RetrievalSelection(tools: ["bank_statement"])),
+        ModelSample(prompt: "What's my credit score and do I have any pending payments?", expected: RetrievalSelection(tools: ["credit_score", "pending_payments"])),
+        ModelSample(prompt: "What's my daily ATM withdrawal limit?", expected: RetrievalSelection(tools: ["card_limits"])),
+        ModelSample(prompt: "How many reward points do I have?", expected: RetrievalSelection(tools: ["reward_points"])),
+        ModelSample(prompt: "Show my autopay settings", expected: RetrievalSelection(tools: ["scheduled_payments"])),
+        ModelSample(prompt: "Any update on the charge I disputed?", expected: RetrievalSelection(tools: ["dispute_status"])),
+        ModelSample(prompt: "What time does the Main St branch close?", expected: RetrievalSelection(tools: ["branch_hours"])),
+        ModelSample(prompt: "How much interest did my savings earn last month?", expected: RetrievalSelection(tools: ["interest_earned"])),
+        ModelSample(prompt: "Do I have any payments still processing?", expected: RetrievalSelection(tools: ["pending_payments"])),
+        ModelSample(prompt: "What payments are scheduled to go out next week?", expected: RetrievalSelection(tools: ["scheduled_payments"])),
+        ModelSample(prompt: "What's my credit limit?", expected: RetrievalSelection(tools: ["card_limits"])),
+        ModelSample(prompt: "What fees did I pay and what interest did I earn last month?", expected: RetrievalSelection(tools: ["fees_and_charges", "interest_earned"])),
+        ModelSample(prompt: "How late is the nearest branch open?", expected: RetrievalSelection(tools: ["get_location", "find_branch", "branch_hours"])),
+        ModelSample(prompt: "Is the airport branch open on Saturday?", expected: RetrievalSelection(tools: ["branch_hours"])),
+        ModelSample(prompt: "Show my reward points and my credit card limit", expected: RetrievalSelection(tools: ["reward_points", "card_limits"])),
+        ModelSample(prompt: "whats my atm limit", expected: RetrievalSelection(tools: ["card_limits"])),
+        ModelSample(prompt: "bal in savings?", expected: RetrievalSelection(tools: ["account_balance"])),
+        ModelSample(prompt: "atm near me", expected: RetrievalSelection(tools: ["get_location", "find_atm"])),
+        ModelSample(prompt: "starbucks charges this month", expected: RetrievalSelection(tools: ["search_transactions"]))
+    ])
+
+    // MARK: Evaluators & Metrics
+
+    let recall = Metric("Recall@4")
+
+    var evaluators: Evaluators {
+        Evaluator { input, subject in
+            guard let expected = input.expected, !expected.tools.isEmpty else {
+                return recall.ignore()
+            }
+            let retrieved = Set(subject.value.tools)
+            let missing = Set(expected.tools).subtracting(retrieved)
+            let got = zip(subject.value.tools, subject.value.scores)
+                .map { String(format: "%@ %.2f", $0.0, $0.1) }
+                .joined(separator: ", ")
+            if missing.isEmpty {
+                return recall.passing(rationale: "all of \(expected.tools.joined(separator: ", ")) in [\(got)]")
+            }
+            return recall.failing(rationale: "missing \(missing.sorted().joined(separator: ", ")) from [\(got)]")
+        }
+    }
+
+    func aggregateMetrics(using aggregator: inout MetricsAggregator) {
+        aggregator.computeMean(of: recall)
+    }
+}
+
 // MARK: - Tool Routing Evaluations
 
 @Suite("Tool Routing Evaluations")
 struct ToolRoutingStrategiesTests {
-    static let evaluation = ToolRoutingEvaluation()
+    static let llmEvaluation = ToolRoutingEvaluation(makeRouter: { LLMRouter() })
+    static let miniLMEvaluation = ToolRoutingEvaluation(makeRouter: { MiniLMRouter() })
 
     /// Metadata recorded alongside each run.
-    static let evaluationInfo: [String: String] = [
-        "ModelName": "SystemLanguageModel",
-        "Strategy": "On-Device LLM Router",
-        "AppVersion": "1.0",
-        "Feature": "Tool selection (routing) for the banking assistant"
-    ]
+    private static func evaluationInfo(model: String, strategy: String) -> [String: String] {
+        [
+            "ModelName": model,
+            "Strategy": strategy,
+            "AppVersion": "1.0",
+            "Feature": "Tool selection (routing) for the banking assistant"
+        ]
+    }
 
     @Test(
         "LLM Router Tool Selection",
         .enabled(if: SystemLanguageModel.default.isAvailable),
-        .evaluates(evaluation, info: evaluationInfo)
+        .evaluates(llmEvaluation, info: evaluationInfo(
+            model: "SystemLanguageModel",
+            strategy: "On-Device LLM Router"
+        ))
     )
     func evaluateToolSelection() async throws {
         let result = EvaluationContext.current.result
 
-        #expect(result.aggregateValue(.mean(of: Self.evaluation.routingAccuracy)) >= 0.8)
+        #expect(result.aggregateValue(.mean(of: Self.llmEvaluation.routingAccuracy)) >= 0.8)
+    }
+
+    // Needs MLX (Apple-silicon Metal): run on device or a Mac — not the
+    // iOS simulator. The first run downloads the MiniLM weights from the
+    // Hugging Face Hub, so it needs network once.
+    @Test(
+        "MiniLM Embedding Router Tool Selection",
+        .evaluates(miniLMEvaluation, info: evaluationInfo(
+            model: "all-MiniLM-L6-v2 (MLX)",
+            strategy: "MiniLM Embedding Router"
+        ))
+    )
+    func evaluateMiniLMToolSelection() async throws {
+        let result = EvaluationContext.current.result
+
+        // Baseline floor, not a target: pure embedding routing is expected
+        // to trail the LLM on dependent chains and multi-intent samples —
+        // that gap is the measurement motivating the hybrid strategy.
+        // Recalibrate this gate after the first recorded run.
+        #expect(result.aggregateValue(.mean(of: Self.miniLMEvaluation.routingAccuracy)) >= 0.5)
+    }
+
+    static let retrievalEvaluation = ToolRetrievalEvaluation()
+
+    // Grades the embedder in its hybrid STAGE-1 role: is every needed
+    // tool in the top-4 shortlist? (Recall@4 — the hybrid's hard ceiling)
+    @Test(
+        "MiniLM Retrieval — Recall@4",
+        .evaluates(retrievalEvaluation, info: evaluationInfo(
+            model: "all-MiniLM-L6-v2 (MLX)",
+            strategy: "MiniLM Retrieval (hybrid Stage 1)"
+        ))
+    )
+    func evaluateMiniLMRetrieval() async throws {
+        let result = EvaluationContext.current.result
+
+        // Recall is the number that must be high — a missed tool here is
+        // unrecoverable in the hybrid. Provisional floor; recalibrate
+        // after the first recorded run.
+        #expect(result.aggregateValue(.mean(of: Self.retrievalEvaluation.recall)) >= 0.75)
     }
 }

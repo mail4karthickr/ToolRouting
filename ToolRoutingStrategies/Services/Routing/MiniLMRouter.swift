@@ -1,0 +1,145 @@
+import Foundation
+
+// MARK: - Sample 2: Embedding-based routing (MLX / MiniLM)
+//
+// Pure semantic retrieval: the query and every tool's texts live in the
+// same embedding space, and routing is a nearest-neighbor lookup. No
+// generation happens at all — so routing is fast and deterministic, but
+// the router can only CLASSIFY: it cannot extract parameters, decompose
+// multi-step requests, or order dependent chains. Those limits are the
+// point of this sample — the eval quantifies them, and the hybrid
+// (retrieval → LLM) sample addresses them.
+
+@MainActor
+final class MiniLMRouter: ToolRouter {
+    let strategyName = "MiniLM Embedding Router"
+
+    struct Config {
+        /// Below this best-match similarity the router ABSTAINS — the
+        /// embedding stage's only "none of the above" mechanism (an
+        /// embedding model can't understand an escalation class; "none"
+        /// as an explicit option belongs to LLM-based selection).
+        /// Calibrated against the eval per design doc §6.5 — tune with
+        /// evidence, not vibes.
+        var similarityThreshold: Float = 0.45
+    }
+
+    private let embedder = MLXEmbedder()
+    private let config = Config()
+    private var indexTask: Task<ToolIndex, Error>?
+
+    // MARK: Index
+
+    private func activeIndexTask() -> Task<ToolIndex, Error> {
+        if let indexTask { return indexTask }
+        let embedder = embedder
+        let specs = ToolCatalog.all.map(\.routableSpec)
+        let task = Task.detached(priority: .userInitiated) {
+            try await ToolIndexStore.loadOrBuild(specs: specs, embedder: embedder)
+        }
+        indexTask = task
+        return task
+    }
+
+    /// Kicks off the model download / index build ahead of the first
+    /// request. Idempotent; a failed build is retried on the next route.
+    func prewarm() {
+        _ = activeIndexTask()
+    }
+
+    // MARK: Retrieval (Stage 1 of the hybrid; article's `retrieve_candidates`)
+
+    /// A tool surfaced by similarity search, with its confidence.
+    struct RetrievedTool: Sendable {
+        let toolName: String
+        let score: Float
+    }
+
+    /// Threshold-filtered top-k tools by similarity. The result is a
+    /// SHORTLIST ranked by score — never an execution plan: ordering,
+    /// dependencies, and multi-tool composition belong to the LLM stage.
+    /// An empty result is the abstention signal ("NO MATCH": nothing
+    /// cleared the threshold).
+    func retrieve(_ query: String, topK: Int = 4) async throws -> [RetrievedTool] {
+        let index: ToolIndex
+        do {
+            index = try await activeIndexTask().value
+        } catch {
+            indexTask = nil // e.g. offline during first model download — retry next time
+            throw error
+        }
+
+        guard let queryVector = try await embedder.embed([query]).first else {
+            throw CancellationError()
+        }
+
+        // Score per tool = max dot product over its entries (vectors are
+        // normalized, so dot product IS cosine similarity).
+        var bestByTool: [String: Float] = [:]
+        for entry in index.entries {
+            let score = zip(entry.vector, queryVector).reduce(into: Float.zero) { $0 += $1.0 * $1.1 }
+            bestByTool[entry.toolName] = max(bestByTool[entry.toolName] ?? -1, score)
+        }
+
+        return bestByTool
+            .filter { $0.value >= config.similarityThreshold }
+            .sorted { $0.value > $1.value }
+            .prefix(topK)
+            .map { RetrievedTool(toolName: $0.key, score: $0.value) }
+    }
+
+    // MARK: Routing
+
+    /// Article-exact selection (argmax-or-none): similarity search is a
+    /// one-shot CLASSIFIER — top-1 tool, or abstain (empty calls) when
+    /// nothing clears the threshold. What to do with an abstain (e.g.
+    /// forward to the backend) is the caller's policy, not the router's.
+    func route(_ query: String) async throws -> RoutingResult {
+        guard let best = try await retrieve(query, topK: 1).first,
+              let tool = ToolName.withDefaultArguments(named: best.toolName, query: query)
+        else {
+            return RoutingResult(strategyName: strategyName, reasoning: nil, calls: [])
+        }
+
+        return RoutingResult(
+            strategyName: strategyName,
+            reasoning: nil, // embedding routers classify; they cannot generate
+            calls: [RoutedCall(tool: tool, confidence: Double(best.score))]
+        )
+    }
+}
+
+// MARK: - Default parameters
+
+extension ToolName {
+    /// Embedding routers select a tool but cannot extract its parameters
+    /// from the request — that's the LLM's job in the hybrid sample.
+    /// Neutral defaults keep the routed call renderable and executable;
+    /// free-text arguments fall back to the raw query.
+    static func withDefaultArguments(named displayName: String, query: String) -> ToolName? {
+        switch displayName {
+        case "list_transactions": .listTransactions(days: 7)
+        case "search_transactions": .searchTransactions(merchant: query)
+        case "routing_number": .routingNumber(account: .checking)
+        case "account_number": .accountNumber(account: .checking)
+        case "card_number": .cardNumber(card: .debit)
+        case "bank_statement": .bankStatement(month: "last month", account: .checking)
+        case "credit_score": .creditScore
+        case "get_location": .getLocation
+        case "find_branch": .findBranch(location: query)
+        case "find_atm": .findATM(location: query)
+        case "fees_and_charges": .feesAndCharges(account: .all)
+        case "account_balance": .accountBalance(account: .all)
+        case "convert_currency": .convertCurrency(amount: query, to: "USD")
+        case "pending_payments": .pendingPayments(account: .all)
+        case "scheduled_payments": .scheduledPayments(account: .all)
+        case "card_limits": .cardLimits(card: .credit)
+        case "reward_points": .rewardPoints
+        case "dispute_status": .disputeStatus(merchant: "all")
+        case "branch_hours": .branchHours(branch: query)
+        case "interest_earned": .interestEarned(account: .all)
+        case "send_to_backend": .sendToBackend(request: query)
+        default: nil
+        }
+    }
+}

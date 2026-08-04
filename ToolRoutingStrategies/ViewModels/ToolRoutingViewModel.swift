@@ -2,6 +2,15 @@ import Foundation
 import FoundationModels
 import Observation
 
+// MARK: - Strategy selection
+
+enum RoutingStrategy: String, CaseIterable, Identifiable {
+    case llm = "LLM"
+    case miniLM = "MiniLM"
+
+    var id: String { rawValue }
+}
+
 // MARK: - ViewModel
 //
 // Orchestrates the chat: appends the user's question, runs it through
@@ -14,9 +23,18 @@ final class ToolRoutingViewModel {
     var messages: [ChatMessage] = []
     var isLoading = false
 
-    // Swap this for the embedding/hybrid router samples —
-    // nothing below this line changes.
-    private let router: any ToolRouter = LLMRouter()
+    /// The active strategy. Routers are long-lived so switching back and
+    /// forth keeps their warmed sessions / built indexes.
+    var strategy: RoutingStrategy = .llm {
+        didSet { prewarm() }
+    }
+
+    private let routers: [RoutingStrategy: any ToolRouter] = [
+        .llm: LLMRouter(),
+        .miniLM: MiniLMRouter()
+    ]
+
+    private var router: any ToolRouter { routers[strategy]! }
 
     var strategyName: String { router.strategyName }
     var unavailabilityMessage: String? { router.unavailabilityMessage }
@@ -54,7 +72,17 @@ final class ToolRoutingViewModel {
 
         do {
             let result = try await router.route(trimmed)
-            messages.append(ChatMessage(content: .routing(result, latency: clock.now - start)))
+            // Abstain ("none"): the router found no tool it trusts.
+            // POLICY, decided here and not in the router: forward the
+            // full request to the backend assistant.
+            if result.calls.isEmpty {
+                messages.append(ChatMessage(content: .routing(
+                    Self.backendFallback(for: trimmed, reason: "No on-device tool matched confidently; forwarding the request to the backend."),
+                    latency: clock.now - start
+                )))
+            } else {
+                messages.append(ChatMessage(content: .routing(result, latency: clock.now - start)))
+            }
         } catch let error as LanguageModelSession.GenerationError {
             // Same production principle: a routing failure should degrade
             // to backend escalation, not a dead end for the user.
