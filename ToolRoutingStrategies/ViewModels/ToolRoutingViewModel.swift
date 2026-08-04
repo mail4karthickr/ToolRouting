@@ -5,8 +5,8 @@ import Observation
 // MARK: - Strategy selection
 
 enum RoutingStrategy: String, CaseIterable, Identifiable {
-    case llm = "LLM"
     case miniLM = "MiniLM"
+    case hybrid = "Hybrid"
 
     var id: String { rawValue }
 }
@@ -25,13 +25,13 @@ final class ToolRoutingViewModel {
 
     /// The active strategy. Routers are long-lived so switching back and
     /// forth keeps their warmed sessions / built indexes.
-    var strategy: RoutingStrategy = .llm {
+    var strategy: RoutingStrategy = .hybrid {
         didSet { prewarm() }
     }
 
     private let routers: [RoutingStrategy: any ToolRouter] = [
-        .llm: LLMRouter(),
-        .miniLM: MiniLMRouter()
+        .miniLM: MiniLMRouter(),
+        .hybrid: HybridOrchestrator()
     ]
 
     private var router: any ToolRouter { routers[strategy]! }

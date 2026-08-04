@@ -1,29 +1,26 @@
 import Foundation
 import FoundationModels
 
-// MARK: - Sample 1: LLM-based routing
+// MARK: - Stage 2: LLM selection over the Stage-1 shortlist
 //
-// The LLM acts purely as the ROUTER: it receives the user query plus all
-// tool descriptions and produces a structured output naming which tool(s)
-// the query needs — it never executes them. Execution of the selected
-// tools (via BankAPIClient) is a separate, later step.
+// The LLM is the hybrid's RANKING stage, never a standalone router: it
+// only ever sees the top-k tools that Stage 1 (MiniLM retrieval)
+// surfaced for the current query, plus the explicit backend escalation
+// option. Given that shortlist it does what similarity search can't:
+// verb reasoning (lookup vs. action), multi-intent decomposition,
+// dependency ordering, and parameter extraction.
+//
+// Keeping the candidate set small is the load-bearing design decision:
+// LLM routing accuracy degrades as distractor tools pile into the
+// instructions (attention dilution; ~20-tool practical ceiling), and on
+// a ~3B model every schema costs context-window budget. With O(k)
+// instructions per request, prompt size stays flat as the catalog grows.
 
 @MainActor
-final class LLMRouter: ToolRouter {
-    let strategyName = "On-Device LLM Router"
-
+final class LLMRouter {
     private let model = SystemLanguageModel.default
 
-    /// The single long-lived session, reused across requests. Its KV
-    /// cache is retained, so the instructions and schema are processed
-    /// exactly once — each new request only pays for its own tokens.
-    /// As a bonus, the accumulated transcript gives the router
-    /// conversational context ("and what about savings?").
-    /// Rotated (recreated) only when the transcript overflows the
-    /// context window or a guardrail violation poisons the session.
-    private var session: LanguageModelSession?
-
-    // MARK: Generable output (private to this strategy)
+    // MARK: Generable output
 
     // Property order matters: guided generation emits fields in declaration
     // order, so `reasoning` comes first to give the model a chain-of-thought
@@ -35,7 +32,7 @@ final class LLMRouter: ToolRouter {
         @Guide(description: "One-sentence explanation of which tool(s) or backend escalation the request needs and why")
         var reasoning: String
 
-        @Guide(description: "The tools needed to satisfy the request, in execution order, each with its parameters extracted from the request. Use sendToBackend if a step requires an action or anything no local tool covers. Use one call for simple requests; only add more when the request genuinely asks for multiple things.", .minimumCount(1), .maximumCount(4))
+        @Guide(description: "The tools needed to satisfy the request, in execution order, each with its parameters extracted from the request. Use sendToBackend if a step requires an action or anything the listed tools don't cover. Use one call for simple requests; only add more when the request genuinely asks for multiple things.", .minimumCount(1), .maximumCount(4))
         var calls: [ToolName]
     }
 
@@ -56,32 +53,52 @@ final class LLMRouter: ToolRouter {
         }
     }
 
-    // MARK: Instructions
+    // MARK: Prewarm
 
-    /// Instructions are generated from the tool definitions so the prompt
-    /// can never drift out of sync with the UI. Today's date is injected
-    /// because the on-device model doesn't know it, and date-relative
-    /// filters like "this week" need it.
-    private func makeInstructions() -> String {
-        // Tools are listed under category headers so the model can narrow
-        // to a capability area before picking the specific tool — a
-        // lightweight form of hierarchical routing.
-        let toolLines = ToolCategory.allCases
-            .compactMap { category -> String? in
-                let tools = ToolCatalog.all.filter { $0.category == category }
-                guard !tools.isEmpty else { return nil }
+    func prewarm() {
+        guard unavailabilityMessage == nil else { return }
+        // Sessions are per-request (their instructions depend on the
+        // query's shortlist), so instruction prefill can't be prewarmed.
+        // Prewarming a blank session still pages the base model in — the
+        // dominant cold-start cost.
+        LanguageModelSession().prewarm()
+    }
 
-                let lines = tools.map { tool in
-                    var line = "• \(tool.displayName) — \(tool.description) Not for: \(tool.notFor). Argument: \(tool.argumentHint)."
-                    if let example = tool.promptExample {
-                        line += " Example: \"\(example)\" → \(tool.displayName)."
-                    }
-                    return line
+    // MARK: Selection
+
+    /// Picks the tool call plan for `query` from the Stage-1 shortlist.
+    /// A fresh session per request is what makes the routing dynamic:
+    /// the candidate set is baked into the instructions, and with O(k)
+    /// instructions there is no transcript worth carrying over, so no
+    /// session rotation logic is needed either.
+    func select(_ query: String, from candidates: [MiniLMRouter.RetrievedTool]) async throws -> RoutingPlan {
+        let session = LanguageModelSession(instructions: makeInstructions(candidates: candidates))
+        let response = try await session.respond(
+            to: query,
+            generating: RoutingPlan.self,
+            includeSchemaInPrompt: false, // the schema lives in the instructions
+            options: GenerationOptions(sampling: .greedy) // routing is classification; greedy makes it reproducible
+        )
+        return response.content
+    }
+
+    // MARK: Instructions (per request — only the shortlisted tools)
+
+    /// Tool lines are generated from the catalog definitions so the
+    /// prompt can never drift out of sync with the UI. Today's date is
+    /// injected because the on-device model doesn't know it, and
+    /// date-relative filters like "this week" need it.
+    private func makeInstructions(candidates: [MiniLMRouter.RetrievedTool]) -> String {
+        let toolLines = candidates
+            .compactMap { ToolCatalog.byName[$0.toolName] }
+            .map { tool in
+                var line = "• \(tool.displayName) — \(tool.description) Not for: \(tool.notFor). Argument: \(tool.argumentHint)."
+                if let example = tool.promptExample {
+                    line += " Example: \"\(example)\" → \(tool.displayName)."
                 }
-
-                return "\(category.rawValue):\n" + lines.joined(separator: "\n")
+                return line
             }
-            .joined(separator: "\n\n")
+            .joined(separator: "\n")
 
         let today = Date.now.formatted(.iso8601.year().month().day())
 
@@ -91,22 +108,25 @@ final class LLMRouter: ToolRouter {
             from the request. App tools are read-only lookups the app runs against \
             the bank's APIs; every lookup listed below is served in-app.
 
-            Only send_to_backend handles the rest:
-            • actions — anything marked (action) below, or that changes anything: \
-            transfers, payments, blocking or freezing cards, raising disputes or \
-            limits, changing settings, opening or closing accounts
-            • bank products no tool covers (loan offers, rates on new products, \
-            application status)
+            A similarity search preselected the candidate tools below for this \
+            request. Select ONLY from these candidates — no other app tool exists \
+            for this request.
+
+            Only sendToBackend handles the rest:
+            • actions — anything that changes anything: transfers, payments, \
+            blocking or freezing cards, raising disputes or limits, changing \
+            settings, opening or closing accounts
+            • anything the candidate tools below don't cover
             • human support or complaints
 
             The VERB decides, not the noun: showing, checking, or viewing anything \
-            is an app tool; doing or changing anything is the backend. Checking a \
-            limit, a dispute's status, or upcoming payments are app tools; raising \
+            is a lookup; doing or changing anything is the backend. Checking a \
+            limit, a dispute's status, or upcoming payments are lookups; raising \
             a limit, opening a dispute, or canceling a payment are backend. \
             Currency conversion QUESTIONS are lookups, served by convert_currency.
 
             IMPORTANT: If ANY part of the request requires the backend, route the \
-            ENTIRE request as a single send_to_backend call with the full original \
+            ENTIRE request as a single sendToBackend call with the full original \
             request as the argument. Otherwise serve EVERY part with app tools — \
             never escalate merely because a request has multiple parts.
 
@@ -125,7 +145,7 @@ final class LLMRouter: ToolRouter {
 
             Today's date is \(today). Resolve relative dates like "this week" against it.
 
-            App tools:
+            Candidate tools:
             \(toolLines)
 
             Respond with a RoutingPlan matching this schema:
@@ -133,9 +153,6 @@ final class LLMRouter: ToolRouter {
             """
     }
 
-    // The schema is baked into the instructions (instead of being injected
-    // with the first prompt) so prewarm() covers its prefill cost too —
-    // otherwise the FIRST request pays several hundred schema tokens.
     // Serialized from the real schema, so it can never drift.
     private static let routingPlanSchemaJSON: String = {
         guard
@@ -144,78 +161,4 @@ final class LLMRouter: ToolRouter {
         else { return "" }
         return json
     }()
-
-    // MARK: Routing
-
-    private func activeSession() -> LanguageModelSession {
-        if let session { return session }
-        let fresh = LanguageModelSession(instructions: makeInstructions())
-        fresh.prewarm()
-        session = fresh
-        return fresh
-    }
-
-    /// Creates the shared session ahead of the first request, hiding the
-    /// model-load and instruction-prefill latency.
-    func prewarm() {
-        guard unavailabilityMessage == nil else { return }
-        _ = activeSession()
-    }
-
-    func route(_ query: String) async throws -> RoutingResult {
-        do {
-            return try await respond(to: query)
-        } catch let error as LanguageModelSession.GenerationError {
-            if case .exceededContextWindowSize = error {
-                // The accumulated transcript no longer fits the context
-                // window — rotate to a fresh session and retry once.
-                session = nil
-                return try await respond(to: query)
-            }
-            if case .guardrailViolation = error {
-                // A refused session can keep refusing follow-ups; rotate
-                // so the next request starts clean, then surface the error.
-                session = nil
-            }
-            throw error
-        }
-    }
-
-    private func respond(to query: String) async throws -> RoutingResult {
-        let session = activeSession()
-
-        let response = try await session.respond(
-            to: query,
-            generating: RoutingPlan.self,
-            includeSchemaInPrompt: false, // the schema lives in the instructions, prefilled by prewarm()
-            options: GenerationOptions(sampling: .greedy) // routing is classification; greedy makes it reproducible
-        )
-
-        let plan = response.content
-
-        // POLICY (enforced in code, not trusted to the model): GET-only
-        // requests are served in-app; if ANY sub-task needs the backend,
-        // the ENTIRE request goes to the backend so the server-side
-        // assistant sees full context. The model detects; code decides.
-        if plan.calls.contains(where: \.isSendToBackend) {
-            return RoutingResult(
-                strategyName: strategyName,
-                reasoning: plan.reasoning,
-                calls: [RoutedCall(tool: .sendToBackend(request: query), confidence: nil)]
-            )
-        }
-
-        // Safety net: small on-device models sometimes repeat a call verbatim.
-        // Instructions discourage it, but dedupe deterministically here too.
-        var seen = Set<String>()
-        let uniqueCalls = plan.calls.filter { seen.insert(String(describing: $0)).inserted }
-
-        return RoutingResult(
-            strategyName: strategyName,
-            reasoning: plan.reasoning,
-            calls: uniqueCalls.map {
-                RoutedCall(tool: $0, confidence: nil)
-            }
-        )
-    }
 }

@@ -344,8 +344,8 @@ struct ToolRetrievalEvaluation: Evaluation {
 
 @Suite("Tool Routing Evaluations")
 struct ToolRoutingStrategiesTests {
-    static let llmEvaluation = ToolRoutingEvaluation(makeRouter: { LLMRouter() })
     static let miniLMEvaluation = ToolRoutingEvaluation(makeRouter: { MiniLMRouter() })
+    static let hybridEvaluation = ToolRoutingEvaluation(makeRouter: { HybridOrchestrator() })
 
     /// Metadata recorded alongside each run.
     private static func evaluationInfo(model: String, strategy: String) -> [String: String] {
@@ -355,20 +355,6 @@ struct ToolRoutingStrategiesTests {
             "AppVersion": "1.0",
             "Feature": "Tool selection (routing) for the banking assistant"
         ]
-    }
-
-    @Test(
-        "LLM Router Tool Selection",
-        .enabled(if: SystemLanguageModel.default.isAvailable),
-        .evaluates(llmEvaluation, info: evaluationInfo(
-            model: "SystemLanguageModel",
-            strategy: "On-Device LLM Router"
-        ))
-    )
-    func evaluateToolSelection() async throws {
-        let result = EvaluationContext.current.result
-
-        #expect(result.aggregateValue(.mean(of: Self.llmEvaluation.routingAccuracy)) >= 0.8)
     }
 
     // Needs MLX (Apple-silicon Metal): run on device or a Mac — not the
@@ -389,6 +375,27 @@ struct ToolRoutingStrategiesTests {
         // that gap is the measurement motivating the hybrid strategy.
         // Recalibrate this gate after the first recorded run.
         #expect(result.aggregateValue(.mean(of: Self.miniLMEvaluation.routingAccuracy)) >= 0.5)
+    }
+
+    // Needs BOTH stages: Apple Intelligence (Stage 2) and MLX Metal +
+    // one-time MiniLM weight download (Stage 1) — device or Mac only.
+    @Test(
+        "Hybrid Router Tool Selection",
+        .enabled(if: SystemLanguageModel.default.isAvailable),
+        .evaluates(hybridEvaluation, info: evaluationInfo(
+            model: "all-MiniLM-L6-v2 (MLX) + SystemLanguageModel",
+            strategy: "Hybrid Router (MiniLM → LLM)"
+        ))
+    )
+    func evaluateHybridToolSelection() async throws {
+        let result = EvaluationContext.current.result
+
+        // Same gate the LLM-only router met before it became Stage 2:
+        // with Recall@4 = 1.0 the shortlist never hides the right tool,
+        // so the hybrid should match LLM-only accuracy (article: ~90% of
+        // it at a fraction of the latency) — a large drop means the
+        // Stage-2 prompt, not retrieval, regressed.
+        #expect(result.aggregateValue(.mean(of: Self.hybridEvaluation.routingAccuracy)) >= 0.8)
     }
 
     static let retrievalEvaluation = ToolRetrievalEvaluation()

@@ -2,11 +2,11 @@ import Foundation
 
 // MARK: - Routing result types
 //
-// Strategy-neutral types shared by all four routing samples:
-//   1. LLMRouter          — LLM-based routing
-//   2. MiniLMRouter (MLX) — embedding routing
-//   3. NLEmbeddingRouter  — embedding routing
-//   4. HybridRouter       — MiniLM retrieval → LLM ranking
+// Strategy-neutral types shared by the routing strategies:
+//   1. MiniLMRouter (MLX)   — embedding-only routing
+//   2. HybridOrchestrator   — MiniLM retrieval (Stage 1) → LLMRouter
+//                             selection (Stage 2) → agent execution
+//                             (Stage 3, not built yet)
 //
 // The tool's parameters travel as associated values on ToolName.
 // `reasoning` is optional because pure embedding routers classify but

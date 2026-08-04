@@ -1,5 +1,68 @@
 # Progress Log
 
+## 2026-08-04 — Hybrid router (Stage 1 → Stage 2) implemented and measured
+
+### What was built
+- `Services/Routing/HybridOrchestrator.swift` — owns the article's cascade
+  and conforms to `ToolRouter` (the "Hybrid" strategy in the UI):
+  1. Stage 1: `MiniLMRouter.retrieve(topK: 4)` shortlist; empty shortlist =
+     cheap abstention (LLM never runs).
+  2. Stage 2: `LLMRouter.select(query, from: shortlist)`.
+  3. Policy enforced in code, not trusted to the model: backend collapse
+     (any `sendToBackend` sub-call escalates the whole request),
+     candidate-set validation (a pick outside the shortlist the session
+     actually saw is ungrounded → escalate), verbatim-duplicate dedupe.
+  4. Stage 3 (NOT built yet): hand the ordered calls to the actual agent
+     for execution — routing currently stops at selection.
+- `Services/Routing/LLMRouter.swift` — REWRITTEN as Stage 2 only; it no
+  longer routes independently. `select(_:from:)` builds per-request
+  instructions containing ONLY the k retrieved tools (+ full escalation
+  policy) and returns a `RoutingPlan` via guided generation (greedy).
+  Fresh session per request — the candidate set is baked into the
+  instructions, so there is no reusable prefix worth a long-lived session;
+  `prewarm()` warms base model weights only. Prompt is O(k), not O(N).
+- LLM-only strategy REMOVED from the picker and the eval suite (the
+  measurement motivating the hybrid is already recorded; the LLM is
+  always Stage 2 now). Picker: MiniLM / Hybrid, default Hybrid.
+
+### Measured (iPhone 17 Pro, iOS 27.0, same 30-sample routing eval)
+| Run | Strategy | Metric | Score |
+|---|---|---|---|
+| 09:01 | Hybrid (MiniLM k=4 → LLM) | **Routing Accuracy** | **0.933 (28/30)** |
+| ref | LLM-only (final recorded run, gate) | Routing Accuracy | ≥ 0.8 |
+| ref | MiniLM embedding-only (final) | Routing Accuracy | 0.500 (15/30) |
+
+Eval wall-clock: 166.9 s for 30 samples ≈ 5.6 s/sample end-to-end on
+device (includes per-request session creation + guided decode; no
+latency metric is recorded yet — add one before optimizing).
+
+### Failure analysis (2/30, both Stage-2 call-count quirks)
+- "Get my June and July statements for checking" — one `bank_statement`
+  call instead of two (model merged both months into one call, or emitted
+  two identical calls that the dedupe collapsed). Tool choice correct.
+- "What's my credit limit?" — two `card_limits` calls instead of one
+  (likely debit + credit fan-out; different args survive dedupe). Tool
+  choice correct.
+- Zero escalation/chain/multi-intent failures — exactly the classes the
+  embedding-only router failed (13 of its 15 misses); the LLM stage
+  recovered all of them, confirming the cascade design.
+
+### Decisions
+- Hybrid gate set to ≥ 0.8 (same bar the LLM-only router met); measured
+  0.933 clears it with margin.
+- Candidate-set validation escalates (send_to_backend) rather than drops
+  the offending call: dropping breaks chains, and the backend can serve
+  anything.
+
+### Next
+- Stage 3: execute the routed calls via the agent (`BankAPIClient`) and
+  compose the final answer — the orchestrator's placeholder step.
+- Hill-climb the two call-count misses (candidates: an instruction nudge
+  on per-period repeats; eval first, keep only if ≥ 0.933 holds).
+- Latency ablation: hybrid vs. the retired LLM-only configuration
+  (article predicts ~25–30% of LLM-only latency; measure, don't assume).
+- Threshold calibration exercise (off-topic samples + sweep) still open.
+
 ## 2026-08-04 — Embedding router (Stage 1) implemented and measured
 
 ### What was built
