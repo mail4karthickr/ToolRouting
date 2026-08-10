@@ -2,19 +2,17 @@ import Foundation
 import FoundationModels
 import Observation
 
-// MARK: - Strategy selection
-
-enum RoutingStrategy: String, CaseIterable, Identifiable {
-    case miniLM = "MiniLM"
-    case hybrid = "Hybrid"
-
-    var id: String { rawValue }
-}
-
 // MARK: - ViewModel
 //
 // Orchestrates the chat: appends the user's question, runs it through
-// the active routing strategy, and appends the routing answer.
+// the hybrid pipeline, and appends the answer with its trace.
+//
+// Every request goes through HybridRouter. MiniLMRouter and LLMRouter
+// still exist as its two stages, and the evals still run them alone to
+// measure what each contributes, but they are not user-facing choices:
+// the embedding stage can't parameterize a call and the LLM stage alone
+// pays the whole catalog in its prompt, so neither is a strategy anyone
+// would pick for an actual question.
 
 @MainActor
 @Observable
@@ -23,18 +21,9 @@ final class ToolRoutingViewModel {
     var messages: [ChatMessage] = []
     var isLoading = false
 
-    /// The active strategy. Routers are long-lived so switching back and
-    /// forth keeps their warmed sessions / built indexes.
-    var strategy: RoutingStrategy = .hybrid {
-        didSet { prewarm() }
-    }
-
-    private let routers: [RoutingStrategy: any ToolRouter] = [
-        .miniLM: MiniLMRouter(),
-        .hybrid: HybridOrchestrator()
-    ]
-
-    private var router: any ToolRouter { routers[strategy]! }
+    /// Long-lived, so its warmed session and built index survive across
+    /// requests.
+    private let router = HybridRouter()
 
     var strategyName: String { router.strategyName }
     var unavailabilityMessage: String? { router.unavailabilityMessage }
@@ -53,12 +42,12 @@ final class ToolRoutingViewModel {
         messages.append(ChatMessage(content: .user(trimmed)))
 
         // Production behavior: if the on-device router is unavailable,
-        // the app should fall back to sending the whole request to the
-        // backend rather than erroring. Modeled here as a single
-        // send_to_backend call.
+        // the app should fall back to answering the request with the
+        // cloud model rather than erroring. Modeled here as a single
+        // `none` call.
         if router.unavailabilityMessage != nil {
             messages.append(ChatMessage(content: .routing(
-                Self.backendFallback(for: trimmed, reason: "On-device routing is unavailable; forwarding the request to the backend."),
+                Self.cloudFallback(reason: "On-device routing is unavailable; answering with the cloud model."),
                 latency: nil
             )))
             return
@@ -72,12 +61,12 @@ final class ToolRoutingViewModel {
 
         do {
             let result = try await router.route(trimmed)
-            // Abstain ("none"): the router found no tool it trusts.
-            // POLICY, decided here and not in the router: forward the
-            // full request to the backend assistant.
+            // Abstain: the router found no tool it trusts. POLICY,
+            // decided here and not in the router: same outcome as an
+            // explicit `none` — the cloud model answers the request.
             if result.calls.isEmpty {
                 messages.append(ChatMessage(content: .routing(
-                    Self.backendFallback(for: trimmed, reason: "No on-device tool matched confidently; forwarding the request to the backend."),
+                    Self.cloudFallback(reason: "No on-device tool matched confidently; answering with the cloud model."),
                     latency: clock.now - start
                 )))
             } else {
@@ -85,10 +74,10 @@ final class ToolRoutingViewModel {
             }
         } catch let error as LanguageModelSession.GenerationError {
             // Same production principle: a routing failure should degrade
-            // to backend escalation, not a dead end for the user.
+            // to the cloud model, not a dead end for the user.
             messages.append(ChatMessage(content: .error(Self.friendlyMessage(for: error))))
             messages.append(ChatMessage(content: .routing(
-                Self.backendFallback(for: trimmed, reason: "On-device routing failed; forwarding the request to the backend."),
+                Self.cloudFallback(reason: "On-device routing failed; answering with the cloud model."),
                 latency: nil
             )))
         } catch {
@@ -96,11 +85,11 @@ final class ToolRoutingViewModel {
         }
     }
 
-    private static func backendFallback(for query: String, reason: String) -> RoutingResult {
+    private static func cloudFallback(reason: String) -> RoutingResult {
         RoutingResult(
-            strategyName: "Backend Fallback",
+            strategyName: "Cloud Fallback",
             reasoning: reason,
-            calls: [RoutedCall(tool: .sendToBackend(request: query), confidence: nil)]
+            calls: [RoutedCall(tool: ToolName.none, confidence: nil)]
         )
     }
 

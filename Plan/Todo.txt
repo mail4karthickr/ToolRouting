@@ -1,0 +1,80 @@
+TODO
+====
+
+[ ] Query decomposition before retrieval (Stage 1)
+    ----------------------------------------------
+    Problem
+      A multi-intent query is embedded as ONE vector, so it lands in the
+      middle of its topics instead of close to any of them. Minor intents
+      get absorbed by the dominant one and fall below unrelated
+      distractors.
+
+    Evidence — Recall@5 run, 2026-08-05, iPhone 17 Pro, 28 samples
+      mean 0.946, minimum 0.500. All loss is in multi-intent samples:
+        1 tool  7/7 perfect
+        2 tools 6/7
+        3 tools 7/7
+        4 tools 4/7
+
+      Score spread (top hit minus 5th) collapses as intents pile up while
+      the top score barely moves — everything becomes mildly similar,
+      nothing strongly similar, so ranking is decided by noise:
+        1 intent  top 0.922  spread 0.185
+        2 intents top 0.924  spread 0.168
+        3 intents top 0.917  spread 0.151
+        4 intents top 0.910  spread 0.130
+
+      The four misses:
+        0.50  "starbucks charges this month and whats my balance"
+              search_transactions 0.93 dominates; account_balance does
+              not make the top 5 at all, beaten by fees_and_charges 0.69,
+              pending_payments 0.68, credit_score 0.68, card_limits 0.67.
+        0.50  "Convert my savings balance to euros, then show my recent
+              transactions and anything still pending"
+              missing list_transactions + pending_payments; the whole
+              shortlist sits in a 0.07 band (0.74-0.81).
+        0.75  direct-deposit bundle — lost bank_statement to
+              pending_payments 0.81 / interest_earned 0.80.
+        0.75  "Starbucks + fees + interest + balance" — lost
+              fees_and_charges to credit_score / card_limits.
+
+    Why the current index does not fix it
+      ToolIndex already embeds description + each example query and takes
+      max similarity per tool. That gives each TOOL several ways to be
+      matched, but the QUERY is still one blended vector. The problem is
+      on the query side.
+
+    Proposed fix
+      Split the query on clause boundaries ("and", ",", "then"), embed
+      each clause, retrieve per clause, union the results (dedupe by
+      tool, keep max score). Every one of the four misses has an explicit
+      clause boundary exactly where the missing tool lives. Stays a pure
+      embedding stage — no LLM before retrieval. Roughly 15 lines in
+      MiniLMRouter.retrieve.
+
+    Open questions
+      - Union size: k per clause, or k total after merge? A 4-clause
+        query at k=5 per clause returns up to 20 candidates, which would
+        blow up the Stage-2 prompt. Probably k per clause, then trim to a
+        global k.
+      - Splitting heuristic vs. cost of being wrong: "fees and charges"
+        is one intent containing "and". Over-splitting adds distractors,
+        which is the cheaper failure.
+      - Would simply raising k have fixed these? Unknown — the recorded
+        attachment only keeps the top 5, so the rank of the missing tools
+        was never captured. Cheap to answer: re-run at k=10 and read the
+        ranks before building anything.
+
+    Do not start before
+      The LLM and hybrid evals have baseline numbers. Changing Stage 1
+      moves the hybrid's input, so measure the cascade first or the
+      before/after is unreadable.
+
+
+[ ] MiniLMRouter.route() has no eval covering it
+    --------------------------------------------
+    route() is argmax-top-1 and is still wired into the UI strategy
+    picker. The embedding eval now grades retrieve() only, so this path
+    is untested. Decide: keep it as the "embedding-only routing" sample
+    and give it a test, or drop it now that the shortlist is the router's
+    product.

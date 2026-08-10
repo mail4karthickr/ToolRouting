@@ -78,7 +78,17 @@ struct MockBankAPIClient: BankAPIClient {
     }
 
     func convertCurrency(amount: String, to currency: String) async throws -> String {
-        "\(amount) converts to \(currency) at today's mock rate of 0.92 per USD."
+        // Returns the CONVERTED total, not just the rate. Handing back a
+        // rate alone invites the model to do the multiplication itself,
+        // which is how an unverifiable figure ends up in an answer about
+        // someone's money.
+        let rate = 0.92
+        let digits = amount.filter { $0.isNumber || $0 == "." }
+        guard let value = Double(digits) else {
+            return "Could not read an amount from '\(amount)'."
+        }
+        let converted = (value * rate).formatted(.number.precision(.fractionLength(0...2)))
+        return "\(amount) is \(converted) \(currency) at today's rate of \(rate) \(currency) per USD."
     }
 
     func pendingPayments(accountType: String) async throws -> [String] {

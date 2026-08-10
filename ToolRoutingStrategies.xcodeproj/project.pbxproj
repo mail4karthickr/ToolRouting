@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B4CF000330410003001919E6 /* ClaudeForFoundationModels in Frameworks */ = {isa = PBXBuildFile; productRef = B4CF000230410002001919E6 /* ClaudeForFoundationModels */; };
 		B4E0000330310003001919E6 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = B4E0000230310002001919E6 /* MLXEmbedders */; };
 /* End PBXBuildFile section */
 
@@ -20,10 +21,38 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		B4CL100630400007001919E6 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolder = None;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		B431329B301A4059001919E6 /* ToolRoutingStrategiesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ToolRoutingStrategiesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B485BB7930075EC80006AEB4 /* ToolRoutingStrategies.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ToolRoutingStrategies.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B4CL100130400002001919E6 /* BankingQAGenerator */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = BankingQAGenerator; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		B4CL100330400004001919E6 /* Exceptions for "ToolRoutingStrategies" folder in "BankingQAGenerator" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Models/BankingAnswer.swift,
+				Models/ToolCatalog.swift,
+				Models/ToolDefinition.swift,
+				Models/Transaction.swift,
+				Services/API/BankAPIClient.swift,
+				Services/API/MockBankAPIClient.swift,
+				Services/API/MockGroundTruth.swift,
+			);
+			target = B4CL100030400001001919E6 /* BankingQAGenerator */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B431329C301A4059001919E6 /* ToolRoutingStrategiesTests */ = {
@@ -38,7 +67,15 @@
 		};
 		B485BB7B30075EC80006AEB4 /* ToolRoutingStrategies */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B4CL100330400004001919E6 /* Exceptions for "ToolRoutingStrategies" folder in "BankingQAGenerator" target */,
+			);
 			path = ToolRoutingStrategies;
+			sourceTree = "<group>";
+		};
+		B4CL100230400003001919E6 /* BankingQAGenerator */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BankingQAGenerator;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -47,12 +84,18 @@
 		B4313298301A4059001919E6 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				B4CF000330410003001919E6 /* ClaudeForFoundationModels in Frameworks */,
 			);
 		};
 		B485BB7630075EC80006AEB4 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				B4E0000330310003001919E6 /* MLXEmbedders in Frameworks */,
+			);
+		};
+		B4CL100530400006001919E6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -63,6 +106,7 @@
 			children = (
 				B485BB7B30075EC80006AEB4 /* ToolRoutingStrategies */,
 				B431329C301A4059001919E6 /* ToolRoutingStrategiesTests */,
+				B4CL100230400003001919E6 /* BankingQAGenerator */,
 				B485BB7A30075EC80006AEB4 /* Products */,
 				B431330430216776001919E6 /* Plan */,
 			);
@@ -73,6 +117,7 @@
 			children = (
 				B485BB7930075EC80006AEB4 /* ToolRoutingStrategies.app */,
 				B431329B301A4059001919E6 /* ToolRoutingStrategiesTests.xctest */,
+				B4CL100130400002001919E6 /* BankingQAGenerator */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -97,6 +142,9 @@
 				B431329C301A4059001919E6 /* ToolRoutingStrategiesTests */,
 			);
 			name = ToolRoutingStrategiesTests;
+			packageProductDependencies = (
+				B4CF000230410002001919E6 /* ClaudeForFoundationModels */,
+			);
 			productName = ToolRoutingStrategiesTests;
 			productReference = B431329B301A4059001919E6 /* ToolRoutingStrategiesTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -122,6 +170,24 @@
 			productName = ToolRoutingStrategies;
 			productReference = B485BB7930075EC80006AEB4 /* ToolRoutingStrategies.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B4CL100030400001001919E6 /* BankingQAGenerator */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B4CL100730400008001919E6 /* Build configuration list for PBXNativeTarget "BankingQAGenerator" */;
+			buildPhases = (
+				B4CL100430400005001919E6 /* Sources */,
+				B4CL100530400006001919E6 /* Frameworks */,
+				B4CL100630400007001919E6 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				B4CL100230400003001919E6 /* BankingQAGenerator */,
+			);
+			name = BankingQAGenerator;
+			productName = BankingQAGenerator;
+			productReference = B4CL100130400002001919E6 /* BankingQAGenerator */;
+			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
 
@@ -153,6 +219,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				B4CF000130410001001919E6 /* XCRemoteSwiftPackageReference "ClaudeForFoundationModels" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B485BB7A30075EC80006AEB4 /* Products */;
@@ -161,6 +228,7 @@
 			targets = (
 				B485BB7830075EC80006AEB4 /* ToolRoutingStrategies */,
 				B431329A301A4059001919E6 /* ToolRoutingStrategiesTests */,
+				B4CL100030400001001919E6 /* BankingQAGenerator */,
 			);
 		};
 /* End PBXProject section */
@@ -185,6 +253,11 @@
 			);
 		};
 		B485BB7530075EC80006AEB4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		B4CL100430400005001919E6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
 			);
@@ -425,6 +498,46 @@
 			};
 			name = Release;
 		};
+		B4CL100830400009001919E6 /* Debug configuration for PBXNativeTarget "BankingQAGenerator" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PLATFORM_DIR)/Developer/Library/Frameworks",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(DEVELOPER_DIR)/..",
+					"$(PLATFORM_DIR)/Developer/Library/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B4CL10093040000A001919E6 /* Release configuration for PBXNativeTarget "BankingQAGenerator" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PLATFORM_DIR)/Developer/Library/Frameworks",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(DEVELOPER_DIR)/..",
+					"$(PLATFORM_DIR)/Developer/Library/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -452,9 +565,25 @@
 			);
 			defaultConfigurationName = Release;
 		};
+		B4CL100730400008001919E6 /* Build configuration list for PBXNativeTarget "BankingQAGenerator" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B4CL100830400009001919E6 /* Debug configuration for PBXNativeTarget "BankingQAGenerator" */,
+				B4CL10093040000A001919E6 /* Release configuration for PBXNativeTarget "BankingQAGenerator" */,
+			);
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		B4CF000130410001001919E6 /* XCRemoteSwiftPackageReference "ClaudeForFoundationModels" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/anthropics/ClaudeForFoundationModels.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.1.4;
+			};
+		};
 		B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
@@ -466,6 +595,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		B4CF000230410002001919E6 /* ClaudeForFoundationModels */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B4CF000130410001001919E6 /* XCRemoteSwiftPackageReference "ClaudeForFoundationModels" */;
+			productName = ClaudeForFoundationModels;
+		};
 		B4E0000230310002001919E6 /* MLXEmbedders */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;

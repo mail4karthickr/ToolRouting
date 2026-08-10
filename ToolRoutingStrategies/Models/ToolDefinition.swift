@@ -27,9 +27,11 @@ struct ToolDefinition: Identifiable {
     /// boundaries and reduces false positives from shallow keyword matching.
     let notFor: String
     let argumentHint: String
-    /// Example queries. Unused by the LLM router, but embedding routers
-    /// should embed these alongside the description — embedding
-    /// description + examples consistently beats description alone.
+    /// Example queries, used by BOTH stages: the embedding index embeds
+    /// them alongside the description (description + examples beats
+    /// description alone), and the LLM router lists them under the tool
+    /// so selection sees the same set of matching requests that
+    /// retrieval scored against.
     let exampleQueries: [String]
     let icon: String
     let color: Color

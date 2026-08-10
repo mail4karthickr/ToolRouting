@@ -4,9 +4,9 @@ import Foundation
 // MARK: - Routable tool spec
 //
 // The embedding-relevant slice of a tool: what gets embedded into the
-// index. Built from ToolCatalog plus the virtual send_to_backend spec,
-// so the escalation class competes on similarity like any other tool
-// instead of relying on a threshold alone.
+// index. Built from ToolCatalog only — real tools. "No match" has no
+// text to embed, so the retrieval stage expresses it as a threshold
+// abstention and the LLM stage expresses it as `none`.
 
 nonisolated struct RoutableToolSpec: Sendable {
     let name: String

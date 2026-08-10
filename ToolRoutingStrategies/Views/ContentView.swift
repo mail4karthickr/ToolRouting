@@ -12,18 +12,9 @@ struct ContentView: View {
                 messageList
                 inputBar
             }
-            .navigationTitle("Bank Assistant Routing")
+            .navigationTitle("Bank Assistant")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Picker("Routing strategy", selection: $viewModel.strategy) {
-                        ForEach(RoutingStrategy.allCases) { strategy in
-                            Text(strategy.rawValue).tag(strategy)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         isShowingTools = true
@@ -89,7 +80,7 @@ struct ContentView: View {
         ContentUnavailableView {
             Label(viewModel.strategyName, systemImage: "arrow.triangle.branch")
         } description: {
-            Text("Ask a question and see which tools the on-device router selects, in which order, and why.\n\nTry \"Find the nearest ATM\" or \"Show my balance and this week's transactions\".")
+            Text("Ask a question and get an answer. Tap any answer to see the three stages behind it — what the embedding search retrieved, what the LLM selected and why, and what the tools returned.\n\nTry \"Find the nearest ATM\" or \"Show my balance and this week's transactions\".")
         }
     }
 

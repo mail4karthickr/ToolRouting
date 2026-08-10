@@ -55,12 +55,34 @@ final class MiniLMRouter: ToolRouter {
         let score: Float
     }
 
+    /// The shortlist plus the full ranking behind it.
+    struct Retrieval: Sendable {
+        /// What Stage 2 gets to see.
+        let shortlist: [RetrievedTool]
+        /// EVERY tool in the index, ranked — including the ones that lost.
+        /// Retrieval is the pipeline's recall ceiling, and a tool missing
+        /// from the shortlist is unrecoverable downstream, so the losers
+        /// are the diagnostic: a near miss is a threshold to tune, an
+        /// also-ran at 0.2 is a tool description to rewrite.
+        let ranked: [RetrievedTool]
+    }
+
+    /// The similarity floor a tool must clear to be shortlisted.
+    var similarityThreshold: Float { config.similarityThreshold }
+
     /// Threshold-filtered top-k tools by similarity. The result is a
     /// SHORTLIST ranked by score — never an execution plan: ordering,
     /// dependencies, and multi-tool composition belong to the LLM stage.
     /// An empty result is the abstention signal ("NO MATCH": nothing
     /// cleared the threshold).
     func retrieve(_ query: String, topK: Int = 4) async throws -> [RetrievedTool] {
+        try await rank(query, topK: topK).shortlist
+    }
+
+    /// `retrieve`, keeping the tools it discarded. Same work, same
+    /// scores — only the reporting differs, so the shortlist a caller
+    /// gets here is identical to the one `retrieve` would return.
+    func rank(_ query: String, topK: Int = 4) async throws -> Retrieval {
         let index: ToolIndex
         do {
             index = try await activeIndexTask().value
@@ -81,11 +103,14 @@ final class MiniLMRouter: ToolRouter {
             bestByTool[entry.toolName] = max(bestByTool[entry.toolName] ?? -1, score)
         }
 
-        return bestByTool
-            .filter { $0.value >= config.similarityThreshold }
+        let ranked = bestByTool
             .sorted { $0.value > $1.value }
-            .prefix(topK)
             .map { RetrievedTool(toolName: $0.key, score: $0.value) }
+
+        return Retrieval(
+            shortlist: Array(ranked.filter { $0.score >= config.similarityThreshold }.prefix(topK)),
+            ranked: ranked
+        )
     }
 
     // MARK: Routing
@@ -138,7 +163,8 @@ extension ToolName {
         case "dispute_status": .disputeStatus(merchant: "all")
         case "branch_hours": .branchHours(branch: query)
         case "interest_earned": .interestEarned(account: .all)
-        case "send_to_backend": .sendToBackend(request: query)
+        // No case for "none": the index only holds real tools, so an
+        // unrecognized name means abstain (nil → empty calls → cloud).
         default: nil
         }
     }

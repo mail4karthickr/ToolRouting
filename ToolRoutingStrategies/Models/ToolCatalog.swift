@@ -132,7 +132,7 @@ enum ToolCatalog {
             displayName: "convert_currency",
             category: .money,
             description: "Answer any currency conversion question: how much an amount, balance, or price is worth in another currency, at the current exchange rate.",
-            notFor: "sending money abroad or exchanging cash (actions); the conversion QUESTION itself is always served by this tool",
+            notFor: "sending money abroad or exchanging cash (actions); the conversion QUESTION itself is always served by this tool. Also NOT for a question that merely mentions an amount without naming another currency — \"do I have enough to cover $5,000\" is a balance question, not a conversion",
             argumentHint: "a concrete amount like '$500' and the target currency code like 'EUR'; when converting an account balance, call account_balance FIRST and pass 'from account_balance' as the amount",
             exampleQueries: ["How much is $500 in euros?", "Convert my savings balance to GBP", "What's 200 dollars in yen?"],
             icon: "arrow.left.arrow.right.circle",

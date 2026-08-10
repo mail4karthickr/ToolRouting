@@ -6,9 +6,9 @@ import FoundationModels
 //   • App tools = read-only GET operations the app executes directly
 //     against the bank's APIs (the raw prompt never leaves the device;
 //     only the structured API call does)
-//   • sendToBackend = the request involves an action (POST), an uncovered
-//     capability, or a MIX of the two — in all cases the FULL original
-//     prompt is forwarded to the server-side assistant
+//   • none = no local tool serves this request — it involves an action
+//     (POST), an uncovered capability, or a MIX of the two. The request
+//     leaves the on-device path and is answered by the cloud model.
 //
 // Each case carries the tool's parameters as typed associated values, so
 // a routed call is a complete, ready-to-execute selection — no free-text
@@ -36,9 +36,9 @@ enum ToolName {
     case disputeStatus(merchant: String)
     case branchHours(branch: String)
     case interestEarned(account: AccountType)
-    /// Escalation: the request (or a sub-task of it) can't be served locally
-    /// and must be forwarded to the backend. Not a failure state.
-    case sendToBackend(request: String)
+    /// No local tool matches: the request (or a sub-task of it) can't be
+    /// served on device, so it goes to the cloud model. Not a failure state.
+    case none
 }
 
 @Generable
@@ -82,7 +82,7 @@ extension ToolName {
         case .disputeStatus: "dispute_status"
         case .branchHours: "branch_hours"
         case .interestEarned: "interest_earned"
-        case .sendToBackend: "send_to_backend"
+        case .none: "none"
         }
     }
 
@@ -109,12 +109,13 @@ extension ToolName {
         case .disputeStatus(let merchant): "merchant: \(merchant)"
         case .branchHours(let branch): "branch: \(branch)"
         case .interestEarned(let account): "account: \(account)"
-        case .sendToBackend(let request): request
+        case .none: nil
         }
     }
 
-    var isSendToBackend: Bool {
-        if case .sendToBackend = self { return true }
+    /// True when the plan says no on-device tool serves the request.
+    var isNone: Bool {
+        if case .none = self { return true }
         return false
     }
 }

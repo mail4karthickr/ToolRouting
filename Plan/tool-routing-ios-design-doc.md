@@ -53,7 +53,7 @@ This hybrid cascade matters even more on‑device than on a server: the article 
 
 - Training a **learned router** (classifier) — the article recommends this only for large, stable ecosystems with abundant query→tool logs; we design the interfaces so one can be slotted in later, but do not build it now.
 - Fine‑tuning the LLM (Foundation Models adapters) or the embedding model — noted as a future option in §5.10.
-- Server‑side routing or Private Cloud Compute execution paths (PCC is used only as the **judge model** in evaluations).
+- Server‑side routing or off‑device execution paths (a server‑side Claude model is used only as the **judge model** in evaluations).
 - Cross‑app / App Intents integration (follow‑up project).
 
 ---
@@ -108,7 +108,7 @@ Announced at WWDC26 ("Meet the Evaluations framework"), with the **Book Tracker*
 - Implement the `Evaluation` protocol: define the **subject** (code under test), a **dataset** of `ModelSample(prompt:expected:)` values (e.g., via `ArrayLoader`), one or more `Metric`s with `Evaluator` closures returning `.passing(rationale:)` / `.failing(rationale:)` (or scores), and `aggregateMetrics` (means, variance, grouped stats) via `MetricsAggregator`.
 - Run through **Swift Testing** with the `.evaluates(...)` trait and assert an **optimization target**, e.g., `#expect(result.aggregateValue(.mean(of: metric)) >= 0.8)`. The report breaks down per‑sample prompts, measurements, and full model responses.
 - **`SampleGenerator`** (`samples.makeSamples(_:targetCount:)`) synthesizes additional dataset samples from a seed set — the article's synthetic‑data recipe, productized.
-- **`ModelJudgeEvaluator`** uses a second, at‑least‑as‑capable model (e.g., `PrivateCloudComputeLanguageModel()`) as a qualitative judge, with numeric scales (even number of levels to avoid a neutral default), `ScoreDimension`s to split vague criteria into narrow ones, and `ModelJudgePrompt` to give the judge app context.
+- **`ModelJudgeEvaluator`** uses a second, at‑least‑as‑capable model (`ClaudeLanguageModel(name: .opus5, …)` from the [ClaudeForFoundationModels](https://github.com/anthropics/ClaudeForFoundationModels) package, which conforms Claude to the framework's `LanguageModel` protocol) as a qualitative judge, with numeric scales (even number of levels to avoid a neutral default), `ScoreDimension`s to split vague criteria into narrow ones, and `ModelJudgePrompt` to give the judge app context.
 - Apple's stated best practices, which we adopt wholesale in §6: start with 20–30 focused samples and grow; **if you can measure it in code, use a heuristic evaluator**; use model judges only for qualitative traits; start the judge simple; let per‑sample *rationales* drive the next change ("hill‑climbing" / evaluation‑driven development).
 
 The framework ships with the newest SDKs (introduced at WWDC26; in beta at the time of writing). Evaluations live in **test targets** only — nothing from this framework ships in the app binary — so the app itself can keep a lower deployment target while evals build against the latest SDK on macOS/CI.
@@ -537,7 +537,7 @@ func routing() async throws {
 
 ### 6.4 Model judges — qualitative residue only
 
-Heuristics can pass while the experience is still wrong (the Book Tracker lesson). Add `ModelJudgeEvaluator` with `PrivateCloudComputeLanguageModel()` as judge for:
+Heuristics can pass while the experience is still wrong (the Book Tracker lesson). Add `ModelJudgeEvaluator` with Claude (`ClaudeLanguageModel`) as judge for:
 
 - **AnswerQuality** on abstention/direct answers (was the tool‑free reply actually helpful and honest?).
 - **PlanQuality** on S3 — split into `ScoreDimension`s, each with an even‑numbered 1–4 scale (no neutral middle): `Completeness` (all sub‑requests addressed) and `Efficiency` (no redundant calls). Provide a `ModelJudgePrompt` describing our app ("an on‑device personal assistant where tools have real side effects; declining is better than a wrong destructive call") plus the gold plan as reference — without app context the judge can't score abstentions correctly, exactly as the Book Tracker session warns.
@@ -553,7 +553,7 @@ One config flag runs the same dataset through: LLM‑only (all tools in one sess
 
 ### 6.7 Regression cadence
 
-- CI: full heuristic suite on every PR touching specs/instructions/router; judges nightly (PCC quota).
+- CI: full heuristic suite on every PR touching specs/instructions/router; judges nightly (Anthropic API cost).
 - **On every iOS/macOS beta and release:** full suite re‑run — the OS updates the FM model under us, and the article is explicit that model updates silently move decision boundaries.
 - Selection‑distribution drift monitor (§5.8) compared to the last green eval baseline.
 
