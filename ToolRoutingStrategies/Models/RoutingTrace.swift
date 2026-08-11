@@ -63,7 +63,10 @@ extension RoutingTrace {
     struct SelectionStage {
         enum Route: String {
             case useTools
-            case sendToCloud
+            /// The model found nothing in the shortlist that serves the
+            /// request. Where it goes next is this app's policy, decided
+            /// in HybridRouter — the model is not asked.
+            case noMatch
         }
 
         struct PlannedCall: Identifiable {
@@ -75,11 +78,15 @@ extension RoutingTrace {
         /// The k tool names whose descriptions went into the prompt —
         /// the only tools this stage could possibly have picked.
         let candidates: [String]
-        /// The model's own one-sentence chain of thought. Generated
-        /// BEFORE `route` and `calls` (declaration order in RoutingPlan),
-        /// so it is the reasoning that led to them, not a rationalization
-        /// written afterwards.
-        let reasoning: String
+        /// The model's own account of the choice, when it gives one.
+        ///
+        /// Nil since `RoutingPlan.reasoning` was dropped for latency — the
+        /// sentence was most of what this stage generated. The stage still
+        /// explains itself, just in facts rather than prose: what was in
+        /// the prompt, what came out, and what policy did to it. Kept as
+        /// an optional rather than deleted because restoring the field is
+        /// one `git revert` away and this is the socket it plugs into.
+        let reasoning: String?
         let route: Route
         let plannedCalls: [PlannedCall]
         /// Policy applied in code AFTER the model answered — dedupe, the
@@ -87,6 +94,15 @@ extension RoutingTrace {
         /// plan; when non-empty it explains a result the model's own
         /// output doesn't account for.
         let policyNotes: [String]
+        /// The prompt's cost and the plan's, separately. The prompt is
+        /// the k tool descriptions; the output is `reasoning`, `route`
+        /// and `calls`, in that order — and `reasoning` is a whole
+        /// sentence against a word and a short list, so it is most of the
+        /// second number. Anyone weighing whether to keep the model's
+        /// chain of thought is weighing THIS, and should read it before
+        /// deciding rather than after.
+        let promptTokens: Int?
+        let outputTokens: Int?
         let duration: Duration
     }
 }
@@ -115,8 +131,29 @@ extension RoutingTrace {
         /// The verifier rejected the first draft (a figure with no source
         /// in any tool output) and the agent answered again.
         let retriedForUnverifiedFigures: Bool
+        /// Which figures had no source, and what the rejected draft said.
+        /// The retry doubles a turn's generation cost, so bringing the
+        /// rate down is worth real effort — and that starts with being
+        /// able to read what the model actually got wrong.
+        let rejectedFigures: [String]
+        let rejectedDraft: String?
         /// Why no answer came back, when one didn't.
         let failure: String?
+        /// Time from the agent's generation starting to its first
+        /// character — so it INCLUDES the tool round trips, which is the
+        /// point: the model cannot write a figure it has not fetched yet.
+        /// Against `duration` it splits the stage into "waiting on tools"
+        /// and "writing", the two costs that behave completely differently
+        /// when the plan grows.
+        ///
+        /// Distinct from `ResponseTiming.timeToFirstToken`, which is
+        /// measured from the user's tap and so also carries Stages 1 and 2.
+        let timeToFirstToken: Duration?
+        /// What the turn's prompt cost. The agent's session has every tool
+        /// bound to it — it has to, being long-lived — so this is the
+        /// number that proves only the ROUTED ones were put in front of the
+        /// model. It should scale with the plan, never with the catalog.
+        let promptTokens: Int?
         let duration: Duration
     }
 }

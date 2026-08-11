@@ -112,14 +112,15 @@ struct LLMRoutingEvaluation: Evaluation {
         let candidates = shortlist.compactMap { ToolCatalog.byName[$0.toolName] }
         let plan = try await LLMRouter().select(query, from: candidates)
 
-        // `route` is the model's own escalation decision, so reading it
-        // is reading the answer, not applying policy. Everything after
-        // it is the RAW plan: a plan that also smuggled `none` into calls
-        // stays as-is and fails the comparison, which is correct — the
-        // hybrid router would have repaired that, and repairing it here
-        // would grade the policy instead of the model.
-        guard plan.route == .useTools else { return ["none"] }
-        return plan.calls.map(\.displayName)
+        // The RAW selection, with no policy applied. Stage 2 now emits
+        // tool NAMES and `none` is one of them, so an abstention already
+        // reads as ["none"] with nothing to translate.
+        //
+        // Deliberately unrepaired: a selection mixing `none` with real
+        // tools stays mixed and fails the comparison. The hybrid router
+        // collapses that to an escalation, and doing the same here would
+        // grade the policy instead of the model.
+        return plan.toolNames
     }
 
     // A note on `orderMatters`. It is true for pure dependency chains,

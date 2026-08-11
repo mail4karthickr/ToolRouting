@@ -15,6 +15,15 @@ nonisolated protocol Embedder: Sendable {
     /// Embeds each text into an L2-normalized vector, so cosine
     /// similarity reduces to a plain dot product.
     func embed(_ texts: [String]) async throws -> [[Float]]
+    /// Pays the model's one-time startup cost now instead of inside the
+    /// first real request. See the MLX implementation for why building
+    /// the index is not enough to cover this.
+    func warm() async throws
+}
+
+extension Embedder {
+    /// Backends with no startup cost need not implement it.
+    func warm() async throws {}
 }
 
 // MARK: - MLX implementation
@@ -33,12 +42,47 @@ actor MLXEmbedder: Embedder {
 
     private let configuration: MLXEmbedders.ModelConfiguration = .minilm_l6
     private var container: MLXEmbedders.ModelContainer?
+    /// The load in flight, so concurrent callers share one.
+    private var loading: Task<MLXEmbedders.ModelContainer, Error>?
 
+    /// Loads the model once, even when several callers ask at once.
+    ///
+    /// The task matters because an actor is REENTRANT at every `await`:
+    /// with a plain `if container == nil` check, a prewarm and a fast
+    /// first question would both see nil, both call
+    /// `loadModelContainer`, and pay the cost twice — which is exactly
+    /// the situation prewarming creates.
     private func loadedContainer() async throws -> MLXEmbedders.ModelContainer {
         if let container { return container }
-        let loaded = try await MLXEmbedders.loadModelContainer(configuration: configuration)
+        if let loading { return try await loading.value }
+
+        let configuration = configuration
+        let task = Task { try await MLXEmbedders.loadModelContainer(configuration: configuration) }
+        loading = task
+        defer { loading = nil }
+
+        let loaded = try await task.value
         container = loaded
         return loaded
+    }
+
+    /// Loads the weights AND runs one forward pass.
+    ///
+    /// Both halves are needed. `loadModelContainer` maps the weights and
+    /// builds the tokenizer; the first inference is what compiles the
+    /// Metal pipelines, and on device that is the larger share. Warming
+    /// with a load alone would move a couple of seconds and leave the
+    /// rest in the user's first question.
+    ///
+    /// Worth being explicit about why the index build does not already
+    /// cover this: `ToolIndexStore.loadOrBuild` returns straight from the
+    /// on-disk cache whenever the catalog is unchanged, and that path
+    /// never calls `embed`. So on every launch after the first — the
+    /// common case — the model stayed unloaded until the user asked
+    /// something, and the whole cost landed on Stage 1 of their first
+    /// request.
+    func warm() async throws {
+        _ = try await embed(["warm up"])
     }
 
     func embed(_ texts: [String]) async throws -> [[Float]] {
@@ -70,5 +114,7 @@ actor MLXEmbedder: Embedder {
     /// reloads it from the on-disk cache.
     func unload() {
         container = nil
+        loading?.cancel()
+        loading = nil
     }
 }

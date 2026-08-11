@@ -27,28 +27,59 @@ identical either way, and inferring it from the silence is what the
 earlier prompt got wrong.
 
 Fabrication works because the API is a mock with fixed values, re-derived
-per run from the sample's tools rather than stored. The judge is a
-server-side model reached through the company gateway
-(``CustomLanguageModel``) — a different and more capable model than the
-on-device one that wrote the answer, so the score is not self-assessment.
+per run from the sample's tools rather than stored. The judge is Claude,
+reached through the Foundation Models server-side model API — a different
+and more capable model than the on-device one that wrote the answer, so
+the score is not self-assessment.
 
-Needs MLX, a one-time MiniLM weight download, Apple Intelligence, and
-gateway credentials (see JudgeModel). Device or Mac only.
+The judge is swappable: `JudgeModel` below reaches a corporate
+OpenAI-compatible gateway through ``CustomLanguageModel`` and drops into
+the same slot. Both conform to `LanguageModel`, so switching is one
+argument to `ModelJudgeEvaluator` and nothing else in this file moves.
+
+Needs MLX, a one-time MiniLM weight download, Apple Intelligence, and an
+Anthropic API key (see ClaudeJudge). Device or Mac only.
 */
 
 import Evaluations
 import Foundation
 import FoundationModels
 import Testing
+import ClaudeForFoundationModels
 @testable import ToolRoutingStrategies
 
-// MARK: - Judge
+// MARK: - Judge (active)
 
-/// The judge, reached through the company's OpenAI-compatible gateway.
+/// Claude as the judge model, conformed to `LanguageModel` by
+/// ClaudeForFoundationModels so it drops straight into
+/// `ModelJudgeEvaluator`.
 ///
-/// ``CustomLanguageModel`` conforms to `LanguageModel`, so it drops
-/// straight into `ModelJudgeEvaluator` where the Claude bridge used to sit
-/// — the dimensions, the prompt, and the scoring are unchanged.
+/// The key is read from the environment rather than bundled, so it never
+/// lands in the repository: set `ANTHROPIC_API_KEY` under Edit Scheme ▸ Test
+/// ▸ Arguments ▸ Environment Variables, or export it before `xcodebuild test`
+/// on a Mac destination. Without it the evaluation is skipped rather than
+/// failing.
+enum ClaudeJudge {
+    static let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+
+    static var isConfigured: Bool { !apiKey.isEmpty }
+
+    static var model: ClaudeLanguageModel {
+        ClaudeLanguageModel(name: .opus5, auth: .apiKey(apiKey))
+    }
+}
+
+// MARK: - Judge (standby)
+
+/// The same judge reached through the company's OpenAI-compatible
+/// gateway, for environments where the Anthropic API is not reachable.
+///
+/// Unused while ``ClaudeJudge`` is wired in. To switch, pass
+/// `JudgeModel.model` to `ModelJudgeEvaluator` below and swap
+/// `ClaudeJudge.isConfigured` for `JudgeModel.isConfigured` in the test's
+/// `.enabled(if:)`. Nothing else in this file changes — both conform to
+/// `LanguageModel`, so the dimensions, the prompt, and the scoring are
+/// identical either way.
 ///
 /// Credentials are read from the environment rather than bundled, so they
 /// never land in the repository: set them under Edit Scheme ▸ Test ▸
@@ -279,7 +310,7 @@ struct HybridAnswerEvaluation: Evaluation {
         FabricationEvaluator()
 
         ModelJudgeEvaluator(
-            judge: JudgeModel.model,
+            judge: ClaudeJudge.model,
             dimensions: [faithfulness, completeness, naturalness],
             prompt: ModelJudgePrompt(
                 instructions: """
@@ -402,14 +433,14 @@ struct HybridRouterTests {
     static let evaluationInfo: [String: String] = [
         "ModelName": "all-MiniLM-L6-v2 (MLX) + SystemLanguageModel",
         "Strategy": "Hybrid cascade end to end (retrieval → selection → agent)",
-        "Judge": "Company gateway (CustomLanguageModel, \(JudgeModel.endpoint?.modelID ?? "unconfigured"))",
+        "Judge": "Claude Opus 5 (ClaudeForFoundationModels)",
         "AppVersion": "1.0",
         "Feature": "End-to-end banking answers (synthetic dataset, \(samples.count) samples)"
     ]
 
     @Test(
         "Hybrid Router Answer Evaluations",
-        .enabled(if: SystemLanguageModel.default.isAvailable && JudgeModel.isConfigured),
+        .enabled(if: SystemLanguageModel.default.isAvailable && ClaudeJudge.isConfigured),
         .evaluates(evaluation, info: evaluationInfo)
     )
     func evaluateAnswers() async throws {

@@ -233,8 +233,8 @@ struct LLMRouterReliabilityEvaluation: Evaluation {
         guard !shortlist.isEmpty else { return ["none"] }
         let candidates = shortlist.compactMap { ToolCatalog.byName[$0.toolName] }
         let plan = try await LLMRouter().select(query, from: candidates)
-        guard plan.route == .useTools else { return ["none"] }
-        return plan.calls.map(\.displayName)
+        // Raw and unrepaired, exactly as LLMRouterTests reads it.
+        return plan.toolNames
     }
 
     // MARK: Metric

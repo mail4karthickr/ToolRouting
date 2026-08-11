@@ -18,7 +18,7 @@ import SwiftUI
 
 struct RoutingTraceSheet: View {
     let result: RoutingResult
-    let latency: Duration?
+    let timing: ResponseTiming
 
     @Environment(\.dismiss) private var dismiss
 
@@ -56,10 +56,19 @@ struct RoutingTraceSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(result.strategyName)
                 .font(.headline)
-            if let latency {
-                Text("End to end: \(latency.traceLabel)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+
+            // Measured from the send, so both numbers include the stages
+            // below plus whatever the app did around them. The per-stage
+            // times will not add up to `total` and are not meant to —
+            // that gap is the app's own overhead, and hiding it by
+            // reporting only the sum of the stages would be flattering.
+            HStack(spacing: 10) {
+                if let first = timing.timeToFirstToken {
+                    TimingChip(title: "First token", value: first.traceLabel)
+                }
+                if let total = timing.total {
+                    TimingChip(title: "End to end", value: total.traceLabel)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,18 +228,36 @@ private struct SelectionStageView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // The model's chain of thought, generated before it chose
-            // anything. Given top billing because it is the one place the
-            // pipeline explains itself in its own words.
-            VStack(alignment: .leading, spacing: 6) {
-                TraceLabel("Thinking")
-                Text(stage.reasoning)
-                    .font(.subheadline)
-                    .italic()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
-                    .textSelection(.enabled)
+            // Prompt vs. plan. The two halves of this stage's cost have
+            // nothing to do with each other: the first shrinks by showing
+            // fewer tools, the second by asking for less writing.
+            if stage.promptTokens != nil || stage.outputTokens != nil {
+                HStack(spacing: 10) {
+                    if let prompt = stage.promptTokens {
+                        TimingChip(title: "Prompt", value: "\(prompt) tok")
+                    }
+                    if let output = stage.outputTokens {
+                        TimingChip(title: "Plan written", value: "\(output) tok")
+                    }
+                }
+            }
+
+            // The model's chain of thought, when it writes one. It no
+            // longer does — the sentence was most of this stage's output
+            // tokens and was dropped for latency — so the card now
+            // explains itself with the decision, the plan and the policy
+            // below instead of in the model's own words.
+            if let reasoning = stage.reasoning {
+                VStack(alignment: .leading, spacing: 6) {
+                    TraceLabel("Thinking")
+                    Text(reasoning)
+                        .font(.subheadline)
+                        .italic()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                        .textSelection(.enabled)
+                }
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -238,14 +265,21 @@ private struct SelectionStageView: View {
                 switch stage.route {
                 case .useTools:
                     Badge(text: "useTools", detail: "The shortlist answers this", tint: .green, icon: "iphone")
-                case .sendToCloud:
-                    Badge(text: "sendToCloud", detail: "No listed tool serves this", tint: .blue, icon: "cloud")
+                case .noMatch:
+                    // Two facts, deliberately separated: what the MODEL
+                    // said, and what this app then did about it. The
+                    // model only reports that nothing fits; the cloud is
+                    // this app's answer to that, not the model's.
+                    Badge(text: "noMatch", detail: "Nothing in the shortlist fits — the app sends it to the cloud", tint: .blue, icon: "cloud")
                 }
             }
 
             if !stage.plannedCalls.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    TraceLabel("Plan, in execution order")
+                    // "Selected", not "in execution order". Stage 2 picks
+                    // WHICH tools; the order they run in is Stage 3's, and
+                    // the numbering here is just a list index.
+                    TraceLabel("Selected tools")
                     ForEach(Array(stage.plannedCalls.enumerated()), id: \.element.id) { index, call in
                         StepRow(step: index + 1, title: call.toolName, detail: call.arguments)
                     }
@@ -285,6 +319,31 @@ private struct ExecutionStageView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            // Splits the stage in two. Everything before the first
+            // character is tool work — the model cannot write a figure it
+            // has not fetched — and everything after is generation. When
+            // this stage is slow, which half it was in decides whether to
+            // look at the API client or at the plan's size.
+            //
+            // ONLY when one generation ran. `timeToFirstToken` belongs to
+            // the generation that produced the answer, so after a retry it
+            // is the SECOND one's, while `duration` still covers both —
+            // subtracting them would file the whole rejected draft under
+            // "writing" and quietly understate what the retry cost.
+            if let first = stage.timeToFirstToken, !stage.retriedForUnverifiedFigures {
+                HStack(spacing: 10) {
+                    TimingChip(title: "Tools, then first token", value: first.traceLabel)
+                    TimingChip(title: "Writing", value: (stage.duration - first).traceLabel)
+                }
+            } else if stage.retriedForUnverifiedFigures {
+                HStack(spacing: 10) {
+                    TimingChip(title: "Generations", value: "2")
+                    if let first = stage.timeToFirstToken {
+                        TimingChip(title: "Retry's first token", value: first.traceLabel)
+                    }
+                }
+            }
+
             if stage.invocations.isEmpty {
                 Text("The agent called no tools.")
                     .font(.subheadline)
@@ -298,12 +357,14 @@ private struct ExecutionStageView: View {
                 }
             }
 
-            // Plan vs. reality. Same list almost always; when it isn't,
-            // the agent skipped or added a step, and that is the single
-            // most useful thing this sheet can tell you.
-            if stage.boundTools != stage.invocations.map(\.toolName) {
+            // Plan vs. reality — compared as SETS, not sequences. Stage 2
+            // selects which tools are needed and says nothing about
+            // order, so a different order is the agent doing its job, not
+            // a discrepancy. What still matters is a selected tool that
+            // never ran, or a call nobody selected.
+            if Set(stage.boundTools) != Set(stage.invocations.map(\.toolName)) {
                 Label(
-                    "Planned: \(stage.boundTools.joined(separator: ", ")) — the agent did not run the plan exactly.",
+                    "Selected: \(stage.boundTools.joined(separator: ", ")) — the agent did not run exactly these.",
                     systemImage: "arrow.triangle.branch"
                 )
                 .font(.caption)
@@ -311,12 +372,30 @@ private struct ExecutionStageView: View {
             }
 
             if stage.retriedForUnverifiedFigures {
-                Label(
-                    "The first draft showed a figure no tool returned. It was rejected and the answer regenerated from the tool output already in the session.",
-                    systemImage: "checkmark.shield"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(
+                        stage.rejectedFigures.isEmpty
+                            ? "The first draft showed a figure no tool returned. It was rejected and the answer written again with the tools withdrawn."
+                            : "Rejected \(stage.rejectedFigures.joined(separator: ", ")) — no tool returned \(stage.rejectedFigures.count == 1 ? "it" : "them"). The answer was written again with the tools withdrawn, so only figures already above could be used.",
+                        systemImage: "checkmark.shield"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+
+                    // The draft itself, because the figure alone rarely
+                    // explains the mistake — a stutter, a rounding, and a
+                    // fabrication all show up as one stray number here and
+                    // need completely different fixes.
+                    if let draft = stage.rejectedDraft {
+                        Text(draft)
+                            .font(.caption.italic())
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                            .textSelection(.enabled)
+                    }
+                }
             }
 
             if let failure = stage.failure {
@@ -488,6 +567,27 @@ private struct StepRow: View {
             }
             Spacer(minLength: 0)
         }
+    }
+}
+
+/// A labelled duration. Labelled because there are now several of them
+/// on this screen and a bare "1.4s" next to another bare "1.4s" is worse
+/// than no number at all.
+private struct TimingChip: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.caption2.uppercaseSmallCaps())
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.monospacedDigit().bold())
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

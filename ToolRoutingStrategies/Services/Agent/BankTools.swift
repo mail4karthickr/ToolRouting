@@ -16,6 +16,32 @@ import FoundationModels
 // parameter schema and the model fills it in — the same guided-decoding
 // guarantee the router gets.
 //
+// EVERY ARGUMENTS TYPE HAS A UNIQUE NAME, and that is a requirement, not
+// a style choice. Generation schemas are identified by type NAME within a
+// session's namespace — `GenerationSchema.SchemaError.duplicateType` is
+// the framework's own acknowledgement of this — and the agent's session
+// now binds all twenty tools at once, so every one of these types is
+// resident together.
+//
+// They used to all be called `Arguments`, nested inside their tool, which
+// was harmless while a session held only the two or three routed tools.
+// Under one long-lived session it produced this, on 2026-08-11:
+//
+//     search_transactions → "Failed to parse generated content"
+//
+// Two tools named the same type: `{days: Int}` for list_transactions and
+// `{merchant: String}` for search_transactions. One won the name, so
+// "how much did I spend at Starbucks last month" was generated against
+// `{days}` — the model emitted a perfectly reasonable `{"days": 30}` —
+// and decoding it into `{merchant}` failed. list_transactions kept
+// working, because its schema was the survivor, which is what made the
+// bug look tool-specific rather than structural.
+//
+// So: name a new tool's arguments after what it asks for, never
+// `Arguments`. The shared types below (AccountArgument, CardArgument,
+// NoArguments) are safe precisely because they are ONE type used by
+// several tools rather than several types wearing one name.
+//
 // Every tool here is a read-only GET against BankAPIClient. That is the
 // invariant the whole `none`/cloud split rests on: if a request needs
 // anything that writes, no tool in this file can serve it, and routing
@@ -60,12 +86,12 @@ struct ListTransactionsTool: Tool {
     var description: String { catalogEntry("list_transactions").description }
 
     @Generable
-    struct Arguments {
+    struct TransactionWindow {
         @Guide(description: "How many past days of transactions to show, e.g. 7")
         var days: Int
     }
 
-    func call(arguments: Arguments) async throws -> String {
+    func call(arguments: TransactionWindow) async throws -> String {
         let transactions = try await client.listTransactions(days: arguments.days)
         guard !transactions.isEmpty else {
             return "No transactions in the last \(arguments.days) days."
@@ -86,12 +112,12 @@ struct SearchTransactionsTool: Tool {
     var description: String { catalogEntry("search_transactions").description }
 
     @Generable
-    struct Arguments {
+    struct MerchantSearch {
         @Guide(description: "The merchant name, e.g. Starbucks")
         var merchant: String
     }
 
-    func call(arguments: Arguments) async throws -> String {
+    func call(arguments: MerchantSearch) async throws -> String {
         let transactions = try await client.searchTransactions(merchant: arguments.merchant)
         guard !transactions.isEmpty else {
             return "No transactions found for \(arguments.merchant)."
@@ -111,12 +137,12 @@ struct DisputeStatusTool: Tool {
     var description: String { catalogEntry("dispute_status").description }
 
     @Generable
-    struct Arguments {
+    struct DisputeQuery {
         @Guide(description: "The merchant of the disputed charge, or 'all'")
         var merchant: String
     }
 
-    func call(arguments: Arguments) async throws -> String {
+    func call(arguments: DisputeQuery) async throws -> String {
         try await client.disputeStatus(merchant: arguments.merchant)
     }
 }
@@ -162,14 +188,14 @@ struct BankStatementTool: Tool {
     var description: String { catalogEntry("bank_statement").description }
 
     @Generable
-    struct Arguments {
+    struct StatementRequest {
         @Guide(description: "The period, e.g. 'June' or 'last month'")
         var month: String
         @Guide(description: "Which account: checking, savings, or credit card")
         var account: String
     }
 
-    func call(arguments: Arguments) async throws -> String {
+    func call(arguments: StatementRequest) async throws -> String {
         try await client.bankStatement(month: arguments.month, accountType: arguments.account)
     }
 }
@@ -266,12 +292,12 @@ struct FindBranchTool: Tool {
     var description: String { catalogEntry("find_branch").description }
 
     @Generable
-    struct Arguments {
+    struct BranchSearch {
         @Guide(description: "The place: a city, zip code, or address")
         var location: String
     }
 
-    func call(arguments: Arguments) async throws -> String {
+    func call(arguments: BranchSearch) async throws -> String {
         let branches = try await client.findBranches(near: arguments.location)
         return branches.isEmpty ? "No branches near \(arguments.location)." : branches.joined(separator: "\n")
     }
@@ -283,12 +309,12 @@ struct FindATMTool: Tool {
     var description: String { catalogEntry("find_atm").description }
 
     @Generable
-    struct Arguments {
+    struct ATMSearch {
         @Guide(description: "The place: a city, zip code, or address")
         var location: String
     }
 
-    func call(arguments: Arguments) async throws -> String {
+    func call(arguments: ATMSearch) async throws -> String {
         let atms = try await client.findATMs(near: arguments.location)
         return atms.isEmpty ? "No ATMs near \(arguments.location)." : atms.joined(separator: "\n")
     }
@@ -300,12 +326,12 @@ struct BranchHoursTool: Tool {
     var description: String { catalogEntry("branch_hours").description }
 
     @Generable
-    struct Arguments {
+    struct BranchHoursQuery {
         @Guide(description: "The branch name, e.g. 'Main St'")
         var branch: String
     }
 
-    func call(arguments: Arguments) async throws -> String {
+    func call(arguments: BranchHoursQuery) async throws -> String {
         try await client.branchHours(branch: arguments.branch)
     }
 }
@@ -318,14 +344,14 @@ struct ConvertCurrencyTool: Tool {
     var description: String { catalogEntry("convert_currency").description }
 
     @Generable
-    struct Arguments {
+    struct CurrencyConversion {
         @Guide(description: "A concrete amount, e.g. '$500'")
         var amount: String
         @Guide(description: "The target currency code, e.g. 'EUR'")
         var to: String
     }
 
-    func call(arguments: Arguments) async throws -> String {
+    func call(arguments: CurrencyConversion) async throws -> String {
         try await client.convertCurrency(amount: arguments.amount, to: arguments.to)
     }
 }
@@ -387,5 +413,22 @@ enum BankToolRegistry {
         case "interest_earned": InterestEarnedTool(client: client)
         default: nil
         }
+    }
+
+    /// Every tool that has an implementation, in catalog order.
+    ///
+    /// Exists because a session's `tools` are fixed at init and the agent
+    /// now keeps ONE session for the app's lifetime: anything the model
+    /// might ever be asked to call has to be bound from the start, or the
+    /// call has nowhere to dispatch to.
+    ///
+    /// This is NOT the same as putting the whole catalog in the prompt.
+    /// What the model can SEE is set per request, by rewriting the
+    /// session's instructions entry with only the routed tools'
+    /// definitions — see `ToolExecutionAgent.beginTurn`. Binding is about
+    /// what is dispatchable; the instructions entry is about what is
+    /// visible, and only the second one costs context.
+    static func allTools(client: any BankAPIClient) -> [any Tool] {
+        ToolCatalog.all.compactMap { tool(named: $0.displayName, client: client) }
     }
 }

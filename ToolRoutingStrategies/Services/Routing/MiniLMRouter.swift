@@ -27,6 +27,7 @@ final class MiniLMRouter: ToolRouter {
     private let embedder = MLXEmbedder()
     private let config = Config()
     private var indexTask: Task<ToolIndex, Error>?
+    private var warmTask: Task<Void, Never>?
 
     // MARK: Index
 
@@ -43,8 +44,29 @@ final class MiniLMRouter: ToolRouter {
 
     /// Kicks off the model download / index build ahead of the first
     /// request. Idempotent; a failed build is retried on the next route.
+    ///
+    /// TWO tasks, not one, and the second is the one that matters in
+    /// practice. Building the index only loads the embedding model when
+    /// there is no cached index to read — so from the second launch
+    /// onwards the index task returns in milliseconds having touched
+    /// nothing, and the model was still cold when the user asked their
+    /// first question. That is where a measured 6.4s Stage 1 came from,
+    /// once per launch, on a stage whose steady-state cost is ~20ms.
+    ///
+    /// They run concurrently because they are independent: the index task
+    /// reads a file, the warm task loads weights. On a first-ever launch
+    /// both want the model and the embedder's own load task dedupes them.
     func prewarm() {
         _ = activeIndexTask()
+
+        guard warmTask == nil else { return }
+        let embedder = embedder
+        // Failure is dropped on purpose: this is an optimisation, and a
+        // model that could not be warmed will be loaded — and its error
+        // reported — by the request that actually needs it.
+        warmTask = Task.detached(priority: .userInitiated) {
+            try? await embedder.warm()
+        }
     }
 
     // MARK: Retrieval (Stage 1 of the hybrid; article's `retrieve_candidates`)

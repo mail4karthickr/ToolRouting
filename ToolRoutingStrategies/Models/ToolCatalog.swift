@@ -5,6 +5,28 @@ import SwiftUI
 // The full set of app tools available to every routing strategy.
 // Both the UI (tool list) and the routers (prompt/embedding text)
 // read from here, so the two can never drift out of sync.
+//
+// `exampleQueries` DELIBERATELY MIXES TWO REGISTERS, and the order is
+// load-bearing:
+//
+//   first  well-formed sentences — "What is my balance?"
+//   then   how people actually type — "bal?", "this weeks txns"
+//
+// Both halves are embedded. ToolIndex vectorises the description and
+// EACH example separately and scores a tool by its best match, so a
+// colloquial entry raises the ceiling for colloquial phrasing without
+// dragging the tool's other vectors toward it. Sentences alone left a
+// measurable gap: real queries arrive lowercase, abbreviated and
+// unpunctuated, and the index had no vector anywhere near them.
+//
+// The ORDER matters because only the first two reach the LLM prompt
+// (LLMRouter.entry caps at two, for context budget). The full sentences
+// are the better teaching examples for a model choosing between five
+// candidates, so they stay in front; the abbreviations are for retrieval,
+// which reads all of them. Append colloquial entries, never prepend.
+//
+// Adding or editing any of this text changes the index fingerprint, so
+// the next launch re-embeds the catalog once before serving a request.
 
 enum ToolCatalog {
     static let all: [ToolDefinition] = [
@@ -14,7 +36,10 @@ enum ToolCatalog {
             description: "List the user's transactions from the recent past.",
             notFor: "merchant-specific searches (use search_transactions), payments that haven't cleared yet (use pending_payments), or a full statement document (use bank_statement)",
             argumentHint: "how many past days of transactions to show, as a digit, e.g. '7'; use '7' if the user doesn't specify",
-            exampleQueries: ["Show my transactions from the last week", "What did I spend in the past 3 days?", "List this month's transactions"],
+            exampleQueries: [
+                "Show my transactions from the last week", "What did I spend in the past 3 days?", "List this month's transactions",
+                "this weeks txns", "recent txns", "txns"
+            ],
             icon: "list.bullet.rectangle",
             color: .blue
         ),
@@ -24,7 +49,10 @@ enum ToolCatalog {
             description: "Search the user's past transactions for a specific merchant — including how much they spent at a store or service.",
             notFor: "a general recent listing without a merchant (use list_transactions)",
             argumentHint: "the merchant name, e.g. 'Starbucks'",
-            exampleQueries: ["What did I spend at Starbucks?", "Show my Amazon purchases", "Any charges from Netflix?"],
+            exampleQueries: [
+                "What did I spend at Starbucks?", "Show my Amazon purchases", "Any charges from Netflix?",
+                "spent at starbucks", "starbucks charges", "amazon spend"
+            ],
             icon: "magnifyingglass",
             color: .gray
         ),
@@ -34,7 +62,10 @@ enum ToolCatalog {
             description: "Show the routing number of the user's account.",
             notFor: "the account number itself (use account_number) or card numbers (use card_number)",
             argumentHint: "which account: checking or savings",
-            exampleQueries: ["What's my routing number?", "I need the routing number for a wire transfer", "Routing number for my checking account"],
+            exampleQueries: [
+                "What's my routing number?", "I need the routing number for a wire transfer", "Routing number for my checking account",
+                "routing no", "whats my routing no"
+            ],
             icon: "number.circle",
             color: .teal
         ),
@@ -44,7 +75,10 @@ enum ToolCatalog {
             description: "Show the user's account number.",
             notFor: "the routing number (use routing_number) or card numbers (use card_number)",
             argumentHint: "which account: checking or savings",
-            exampleQueries: ["What's my account number?", "Show my savings account number", "I need my checking account number for direct deposit"],
+            exampleQueries: [
+                "What's my account number?", "Show my savings account number", "I need my checking account number for direct deposit",
+                "acct number", "my acc number"
+            ],
             icon: "123.rectangle",
             color: .indigo
         ),
@@ -54,7 +88,10 @@ enum ToolCatalog {
             description: "Show the number of the user's debit or credit card.",
             notFor: "blocking, freezing, or replacing a card (actions)",
             argumentHint: "which card: debit or credit",
-            exampleQueries: ["What's my debit card number?", "Show my credit card number", "I need my card number"],
+            exampleQueries: [
+                "What's my debit card number?", "Show my credit card number", "I need my card number",
+                "card no", "debit card no"
+            ],
             icon: "creditcard",
             color: .purple
         ),
@@ -64,7 +101,10 @@ enum ToolCatalog {
             description: "Show the user's bank statement for a given month or period.",
             notFor: "listing individual transactions inline (use list_transactions)",
             argumentHint: "the period and account in plain text, e.g. 'June', 'last month, checking'",
-            exampleQueries: ["Get my bank statement for June", "Show last month's statement", "Download my checking account statement"],
+            exampleQueries: [
+                "Get my bank statement for June", "Show last month's statement", "Download my checking account statement",
+                "june stmt", "last months statement"
+            ],
             icon: "doc.text",
             color: .brown
         ),
@@ -74,7 +114,10 @@ enum ToolCatalog {
             description: "Show the user's current credit score.",
             notFor: "advice on improving or disputing the score",
             argumentHint: "no parameters",
-            exampleQueries: ["What's my credit score?", "Show my current credit score", "Has my credit score changed?"],
+            exampleQueries: [
+                "What's my credit score?", "Show my current credit score", "Has my credit score changed?",
+                "my fico", "fico score", "credit score"
+            ],
             icon: "gauge",
             color: .mint
         ),
@@ -84,7 +127,10 @@ enum ToolCatalog {
             description: "Get the user's current location. Call this FIRST when the user says 'near me' or 'nearest' without naming a place, then pass its result to find_branch or find_atm.",
             notFor: "requests that already name a place, city, or zip code — pass those directly to find_branch or find_atm",
             argumentHint: "no parameters",
-            exampleQueries: ["(step 1 of) Find an ATM near me", "(step 1 of) Where's the closest branch?"],
+            exampleQueries: [
+                "(step 1 of) Find an ATM near me", "(step 1 of) Where's the closest branch?",
+                "(step 1 of) nearest atm", "(step 1 of) atm near me"
+            ],
             icon: "location.circle",
             color: .pink
         ),
@@ -94,7 +140,10 @@ enum ToolCatalog {
             description: "Find bank branches at a given location.",
             notFor: "ATMs (use find_atm) or booking an appointment (action)",
             argumentHint: "the place: a city, zip code, or 'current location' when it comes from get_location",
-            exampleQueries: ["Is there a branch in downtown?", "Nearest branch to 94103", "Find a branch near me"],
+            exampleQueries: [
+                "Is there a branch in downtown?", "Nearest branch to 94103", "Find a branch near me",
+                "nearest branch", "branch near me"
+            ],
             icon: "mappin.and.ellipse",
             color: .red
         ),
@@ -104,7 +153,10 @@ enum ToolCatalog {
             description: "Find ATMs at a given location.",
             notFor: "branches with tellers (use find_branch) or changing withdrawal limits (action)",
             argumentHint: "the place: a city, zip code, or 'current location' when it comes from get_location",
-            exampleQueries: ["Find the nearest ATM", "Any ATMs in the airport?", "ATMs near 94103"],
+            exampleQueries: [
+                "Find the nearest ATM", "Any ATMs in the airport?", "ATMs near 94103",
+                "nearest atm", "atm near me", "closest atm"
+            ],
             icon: "dollarsign.square",
             color: .yellow
         ),
@@ -114,7 +166,10 @@ enum ToolCatalog {
             description: "Show the fees and charges on the user's account, such as the monthly service fee.",
             notFor: "waiving or disputing a fee (actions)",
             argumentHint: "which fee or account, e.g. 'monthly service fee', 'all charges on checking'",
-            exampleQueries: ["What's my monthly service fee?", "What charges are on my account?", "Why am I being charged a service fee?"],
+            exampleQueries: [
+                "What's my monthly service fee?", "What charges are on my account?", "Why am I being charged a service fee?",
+                "any fees", "fees on my acct"
+            ],
             icon: "dollarsign.circle",
             color: .orange
         ),
@@ -122,9 +177,12 @@ enum ToolCatalog {
             displayName: "account_balance",
             category: .accounts,
             description: "Show the current balance of the user's accounts (checking, savings, credit card).",
-            notFor: "past transactions (use list_transactions) or payments still processing (use pending_payments)",
+            notFor: "a reward points balance (use reward_points), past transactions (use list_transactions), or payments still processing (use pending_payments)",
             argumentHint: "which account: checking, savings, credit card, or all",
-            exampleQueries: ["What is my balance?", "How much do I have in savings?", "Show all my account balances"],
+            exampleQueries: [
+                "What is my balance?", "How much do I have in savings?", "Show all my account balances",
+                "bal?", "whats my bal", "how much money do i have"
+            ],
             icon: "banknote",
             color: .green
         ),
@@ -134,7 +192,10 @@ enum ToolCatalog {
             description: "Answer any currency conversion question: how much an amount, balance, or price is worth in another currency, at the current exchange rate.",
             notFor: "sending money abroad or exchanging cash (actions); the conversion QUESTION itself is always served by this tool. Also NOT for a question that merely mentions an amount without naming another currency — \"do I have enough to cover $5,000\" is a balance question, not a conversion",
             argumentHint: "a concrete amount like '$500' and the target currency code like 'EUR'; when converting an account balance, call account_balance FIRST and pass 'from account_balance' as the amount",
-            exampleQueries: ["How much is $500 in euros?", "Convert my savings balance to GBP", "What's 200 dollars in yen?"],
+            exampleQueries: [
+                "How much is $500 in euros?", "Convert my savings balance to GBP", "What's 200 dollars in yen?",
+                "500 usd in eur", "200 dollars to yen"
+            ],
             icon: "arrow.left.arrow.right.circle",
             color: .mint
         ),
@@ -144,7 +205,10 @@ enum ToolCatalog {
             description: "Show payments and transactions that are currently processing and haven't cleared yet.",
             notFor: "future scheduled payments and autopay (use scheduled_payments), completed transactions (use list_transactions), or making or canceling a payment (action)",
             argumentHint: "which account or payee, or 'all'",
-            exampleQueries: ["Do I have any pending payments?", "Show payments that haven't cleared", "Any pending charges on my credit card?"],
+            exampleQueries: [
+                "Do I have any pending payments?", "Show payments that haven't cleared", "Any pending charges on my credit card?",
+                "whats pending", "anything pending"
+            ],
             icon: "clock.arrow.circlepath",
             color: .cyan
         ),
@@ -154,7 +218,10 @@ enum ToolCatalog {
             description: "Show upcoming scheduled payments, future transfers, and autopay settings.",
             notFor: "payments already processing (use pending_payments) or creating, changing, or canceling a payment (actions)",
             argumentHint: "the period or payee, e.g. 'next week', 'electricity bill', or 'all'",
-            exampleQueries: ["What payments are scheduled for next week?", "Show my autopay settings", "When is my rent transfer going out?"],
+            exampleQueries: [
+                "What payments are scheduled for next week?", "Show my autopay settings", "When is my rent transfer going out?",
+                "upcoming payments", "whats scheduled"
+            ],
             icon: "calendar.badge.clock",
             color: .teal,
             promptExample: "When does my rent payment go out?"
@@ -165,7 +232,10 @@ enum ToolCatalog {
             description: "Show the limits of the user's card: credit limit, daily ATM withdrawal limit, and spending limit.",
             notFor: "the card number (use card_number), the credit score (use credit_score), or raising a limit (action)",
             argumentHint: "which card: debit or credit",
-            exampleQueries: ["What's my credit limit?", "What's my daily ATM withdrawal limit?", "How much can I spend on my debit card?"],
+            exampleQueries: [
+                "What's my credit limit?", "What's my daily ATM withdrawal limit?", "How much can I spend on my debit card?",
+                "atm limit", "daily limit"
+            ],
             icon: "gauge.with.needle",
             color: .orange,
             promptExample: "What's the max I can spend on my card?"
@@ -174,9 +244,12 @@ enum ToolCatalog {
             displayName: "reward_points",
             category: .creditAndRewards,
             description: "Show the user's reward points balance and their cash value.",
-            notFor: "money balances (use account_balance) or redeeming points (action)",
+            notFor: "a cash balance in checking, savings or a credit card (use account_balance) — a POINTS balance belongs here — or redeeming points (action)",
             argumentHint: "no parameters",
-            exampleQueries: ["How many reward points do I have?", "What's my points balance worth?", "Show my rewards"],
+            exampleQueries: [
+                "How many reward points do I have?", "What's my points balance worth?", "Show my rewards",
+                "pts balance", "how many pts"
+            ],
             icon: "star.circle",
             color: .yellow
         ),
@@ -186,7 +259,10 @@ enum ToolCatalog {
             description: "Show the status of transaction disputes the user has already raised.",
             notFor: "raising a NEW dispute or reporting fraud (actions)",
             argumentHint: "the merchant of the disputed charge, or 'all'",
-            exampleQueries: ["Any update on the charge I disputed?", "What's the status of my dispute?", "Show my open disputes"],
+            exampleQueries: [
+                "Any update on the charge I disputed?", "What's the status of my dispute?", "Show my open disputes",
+                "dispute update", "whats happening with my dispute"
+            ],
             icon: "exclamationmark.shield",
             color: .red,
             promptExample: "What's happening with the dispute I raised?"
@@ -197,7 +273,10 @@ enum ToolCatalog {
             description: "Show the opening hours of a branch the user names, e.g. 'the Main St branch' or 'the airport branch'.",
             notFor: "finding which branches exist — when the user names the branch, call this tool DIRECTLY with that name; only chain get_location and find_branch first when no branch is named",
             argumentHint: "the branch name, e.g. 'Main St', or 'from find_branch' when it comes from an earlier step",
-            exampleQueries: ["What time does the Main St branch close?", "Is the airport branch open on Saturday?", "Branch opening hours"],
+            exampleQueries: [
+                "What time does the Main St branch close?", "Is the airport branch open on Saturday?", "Branch opening hours",
+                "branch timings", "main st branch hours"
+            ],
             icon: "clock",
             color: .brown
         ),
@@ -207,7 +286,10 @@ enum ToolCatalog {
             description: "Show the interest the user's accounts have earned.",
             notFor: "fees charged to the account (use fees_and_charges) or rates offered on new products",
             argumentHint: "which account and period, e.g. 'savings last month'",
-            exampleQueries: ["How much interest did my savings earn?", "What interest did I get this year?", "Show interest earned on my accounts"],
+            exampleQueries: [
+                "How much interest did my savings earn?", "What interest did I get this year?", "Show interest earned on my accounts",
+                "interest earned", "savings interest"
+            ],
             icon: "percent",
             color: .green
         )
