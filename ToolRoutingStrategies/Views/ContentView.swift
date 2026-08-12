@@ -5,6 +5,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var viewModel = ToolRoutingViewModel()
     @State private var isShowingTools = false
+    @State private var isShowingLog = false
 
     /// Owned explicitly rather than left to whatever the tap happened to
     /// focus, so the field can be put back into focus after a send —
@@ -21,7 +22,17 @@ struct ContentView: View {
             .navigationTitle("Bank Assistant")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Reachable from the chat on purpose: the log is read
+                    // right after the answer that looked wrong, and
+                    // needing Xcode for that means it is read never.
+                    Button {
+                        isShowingLog = true
+                    } label: {
+                        Image(systemName: "doc.text.magnifyingglass")
+                    }
+                    .accessibilityLabel("Show the log")
+
                     Button {
                         isShowingTools = true
                     } label: {
@@ -32,6 +43,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $isShowingTools) {
                 toolsSheet
+            }
+            .sheet(isPresented: $isShowingLog) {
+                LogSheet()
             }
         }
         .task { viewModel.prewarm() }

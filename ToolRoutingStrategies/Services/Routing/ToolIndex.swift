@@ -60,12 +60,22 @@ nonisolated enum ToolIndexStore {
         if let data = try? Data(contentsOf: url),
            let cached = try? JSONDecoder().decode(ToolIndex.self, from: data),
            cached.fingerprint == fingerprint {
+            Log.index.info("cache HIT \(fingerprint.prefix(16)) — \(cached.entries.count) vectors, no model load")
             return cached
         }
 
+        // A miss on a launch that should have hit is the thing to catch
+        // here: the fingerprint covers every embedded text plus the model
+        // ID, so an unexpected rebuild means the catalog changed — or a
+        // write failed last time and has been failing silently since.
+        Log.index.info("cache MISS \(fingerprint.prefix(16)) at \(url.path()) — building")
+
+        let clock = ContinuousClock()
+        let start = clock.now
         let texts = specs.flatMap(\.embeddingTexts)
         let names = specs.flatMap { spec in spec.embeddingTexts.map { _ in spec.name } }
         let vectors = try await embedder.embed(texts)
+        Log.index.info("built \(vectors.count) vectors in \((clock.now - start).logged)")
 
         let index = ToolIndex(
             fingerprint: fingerprint,
@@ -74,13 +84,19 @@ nonisolated enum ToolIndexStore {
             }
         )
 
-        // Best-effort cache: routing works fine without persistence.
-        if let data = try? JSONEncoder().encode(index) {
-            try? FileManager.default.createDirectory(
+        // Best-effort cache: routing works fine without persistence — but
+        // a write that keeps failing costs a full rebuild every launch,
+        // and without this line the only symptom is a slow first request.
+        do {
+            let data = try JSONEncoder().encode(index)
+            try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try? data.write(to: url, options: .atomic)
+            try data.write(to: url, options: .atomic)
+            Log.index.info("persisted \(data.count / 1024) KB to \(url.lastPathComponent)")
+        } catch {
+            Log.index.warning("persisting the index failed, will rebuild next launch: \(error)")
         }
 
         return index

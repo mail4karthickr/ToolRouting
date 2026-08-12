@@ -694,7 +694,7 @@
     },
     "output": {
       "value": {
-        "answer": "Your June statement for the checking account is ready under Documents.",
+        "answer": "Your June statements for the checking, savings and credit card accounts are all ready under Documents.",
         "arguments": [
           "June"
         ],

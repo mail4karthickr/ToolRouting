@@ -35,6 +35,7 @@ final class MiniLMRouter: ToolRouter {
         if let indexTask { return indexTask }
         let embedder = embedder
         let specs = ToolCatalog.all.map(\.routableSpec)
+        Log.stage1.info("index task started for \(specs.count) tools, \(specs.flatMap(\.embeddingTexts).count) texts")
         let task = Task.detached(priority: .userInitiated) {
             try await ToolIndexStore.loadOrBuild(specs: specs, embedder: embedder)
         }
@@ -64,8 +65,18 @@ final class MiniLMRouter: ToolRouter {
         // Failure is dropped on purpose: this is an optimisation, and a
         // model that could not be warmed will be loaded — and its error
         // reported — by the request that actually needs it.
+        //
+        // Logged even so, and at `warning`: a warm that quietly failed is
+        // exactly what a 6-second first Stage 1 looks like from outside.
         warmTask = Task.detached(priority: .userInitiated) {
-            try? await embedder.warm()
+            let clock = ContinuousClock()
+            let start = clock.now
+            do {
+                try await embedder.warm()
+                Log.stage1.info("embedder warm ✓ \((clock.now - start).logged)")
+            } catch {
+                Log.stage1.warning("embedder warm failed after \((clock.now - start).logged): \(error)")
+            }
         }
     }
 
@@ -105,17 +116,24 @@ final class MiniLMRouter: ToolRouter {
     /// scores — only the reporting differs, so the shortlist a caller
     /// gets here is identical to the one `retrieve` would return.
     func rank(_ query: String, topK: Int = 4) async throws -> Retrieval {
+        let clock = ContinuousClock()
+        let start = clock.now
+
         let index: ToolIndex
         do {
             index = try await activeIndexTask().value
         } catch {
             indexTask = nil // e.g. offline during first model download — retry next time
+            Log.stage1.error("index unavailable after \((clock.now - start).logged): \(error)")
             throw error
         }
+        let indexReady = clock.now
 
         guard let queryVector = try await embedder.embed([query]).first else {
+            Log.stage1.error("query embedding cancelled")
             throw CancellationError()
         }
+        let embedded = clock.now
 
         // Score per tool = max dot product over its entries (vectors are
         // normalized, so dot product IS cosine similarity).
@@ -129,10 +147,31 @@ final class MiniLMRouter: ToolRouter {
             .sorted { $0.value > $1.value }
             .map { RetrievedTool(toolName: $0.key, score: $0.value) }
 
-        return Retrieval(
-            shortlist: Array(ranked.filter { $0.score >= config.similarityThreshold }.prefix(topK)),
-            ranked: ranked
-        )
+        let shortlist = Array(ranked.filter { $0.score >= config.similarityThreshold }.prefix(topK))
+
+        // The split matters when Stage 1 is slow: waiting on the index
+        // (a first-launch build, or weights still downloading) and
+        // embedding the query are seconds and milliseconds respectively,
+        // and only one of them is fixable by tuning this stage.
+        Log.stage1.debug("""
+            rank: index \((indexReady - start).logged), embed \((embedded - indexReady).logged), \
+            score \((clock.now - embedded).logged) over \(index.entries.count) vectors
+            """)
+        // The FULL ranking, losers included, at debug. This is the recall
+        // ceiling for the request: whatever is missing here cannot be
+        // recovered downstream, and a tool sitting just below the cut is
+        // the difference between a threshold to tune and a description to
+        // rewrite.
+        Log.stage1.debug("""
+            ranked (cut \(config.similarityThreshold), topK \(topK)): \
+            \(ranked.map { "\($0.toolName)=\(String(format: "%.3f", $0.score))" }.joined(separator: " "))
+            """)
+
+        if shortlist.isEmpty {
+            Log.stage1.warning("shortlist EMPTY — best \(ranked.first.map { "\($0.toolName)=\(String(format: "%.3f", $0.score))" } ?? "none")")
+        }
+
+        return Retrieval(shortlist: shortlist, ranked: ranked)
     }
 
     // MARK: Routing

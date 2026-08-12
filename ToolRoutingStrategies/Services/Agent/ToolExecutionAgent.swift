@@ -172,6 +172,13 @@ final class ToolExecutionAgent {
             transcript: Transcript(entries: [.instructions(instructions)] + history)
         )
         sessionsBuilt += 1
+        // BOUND is the list the model can dispatch to; anything else it
+        // names has nowhere to go. Logged with the carried history size
+        // because the two together are this session's whole context.
+        Log.stage3.debug("""
+            session #\(sessionsBuilt) bound \(bound.map(\.name)), \
+            \(history.count) history entr\(history.count == 1 ? "y" : "ies")
+            """)
         return session
     }
 
@@ -208,7 +215,12 @@ final class ToolExecutionAgent {
             }
         }
         if history.count > Self.historyEntryLimit {
-            history.removeFirst(history.count - Self.historyEntryLimit)
+            let dropped = history.count - Self.historyEntryLimit
+            history.removeFirst(dropped)
+            // Where "it forgot what I just asked" comes from. The cap is
+            // deliberate, but the turn it starts biting on is worth
+            // knowing when a follow-up question stops resolving.
+            Log.stage3.info("history trimmed by \(dropped) to \(Self.historyEntryLimit) entries")
         }
     }
 
@@ -288,11 +300,35 @@ final class ToolExecutionAgent {
         // A plan naming only tools with no implementation cannot be run.
         // Better to surface that than to hand the model an empty toolbox
         // and let it invent an answer.
-        guard !tools.isEmpty else { throw AgentError.noExecutableTools(names) }
+        guard !tools.isEmpty else {
+            Log.stage3.error("no executable tool for \(names) — nothing to bind")
+            throw AgentError.noExecutableTools(names)
+        }
 
         let runnable = names.filter { BankToolRegistry.tool(named: $0, client: client) != nil }
+        if runnable.count != names.count {
+            // A routed name with no registry entry: the catalog and the
+            // registry have drifted apart.
+            Log.stage3.error("unimplemented tool(s) dropped from the plan: \(Set(names).subtracting(runnable).sorted())")
+        }
+
         let session = makeSession(for: runnable, tools: tools)
         let answer = try await respond(in: session, to: query, onUpdate: onUpdate)
+
+        // Every call the model actually made, with the arguments it chose
+        // and what came back. This is where a wrong answer is usually
+        // explained: the right tool called with the wrong account, or a
+        // chain that ran out of order and passed a placeholder along.
+        for invocation in answer.invocations {
+            Log.stage3.info("""
+                ↳ \(invocation.toolName)(\(invocation.arguments ?? "")) \
+                → \(invocation.output?.loggable() ?? "NO OUTPUT")
+                """)
+        }
+        if answer.text.isEmpty {
+            Log.stage3.error("empty reply — planned \(runnable), called \(answer.executedTools)")
+        }
+
         remember(session.transcript)
         return answer
     }
@@ -343,6 +379,11 @@ final class ToolExecutionAgent {
 
             if timeToFirstToken == nil {
                 timeToFirstToken = clock.now - start
+                // Everything before this instant is tool execution: the
+                // model cannot write a grounded figure until the calls
+                // have come back. A long ttft with fast tools is a slow
+                // prefill; a long one with slow tools is the API.
+                Log.stage3.debug("first token at \((clock.now - start).logged)")
             }
             text = partial
             onUpdate(.answerPartial(partial))
@@ -374,6 +415,43 @@ final class ToolExecutionAgent {
     /// contributing an irrelevant figure, while leaving the trajectory
     /// deterministic: every tool routing selected should appear, and one
     /// that doesn't is a real defect rather than obedience.
+    // TRIED AND REVERTED, 2026-08-12. A paragraph told the model to
+    // summarise list-shaped tool output rather than reproduce the rows,
+    // aiming at samples 26 and 29 (verbatim transaction dumps scoring
+    // Naturalness 2). It compressed by dropping qualifiers and merging
+    // figures ACROSS rows: "$27.14" lost "last month at 4.05% APY",
+    // Netflix's $15.49 was reattached to the credit card autopay, and one
+    // answer asserted "no transactions found" that no tool returned.
+    // Faithfulness fell on three working samples (39, 47, 51) and neither
+    // target improved. Whatever fixes a verbatim dump, it is not an
+    // instruction to be briefer.
+    //
+    // FIXED ELSEWHERE, 2026-08-12, once that reversion was read properly:
+    // both failure modes were the model doing work on a row-shaped
+    // payload — pasting it (Naturalness 2) or folding it up and losing a
+    // date doing so (Faithfulness 2). Neither is a behaviour these
+    // instructions can reach, because the instruction that would reach it
+    // is the one that just failed. `ListTransactionsTool.summary` now
+    // returns the window as one sentence, so there is no table to paste
+    // and no compression left for the model to get wrong.
+    //
+    // MEASURED on the run after: sample 3 went Naturalness 2 → 4 ("one
+    // concise, conversational sentence … no raw output pasted through"),
+    // and sample 1's misattributed Amazon date went with it, 2 → 4 on
+    // Faithfulness. Sample 2 regressed 4 → 1 on Completeness in a way
+    // worth naming, because it is the reason the "never announce"
+    // paragraph below exists: given three tools whose output was now
+    // short, the model wrote "Here are your recent transactions, pending
+    // payments, and scheduled payments." and STOPPED. It named all three
+    // parts and delivered none of them.
+    //
+    // That is not the reverted "be briefer" instruction returning under
+    // another name, and the distinction is the whole reason it is safe to
+    // add: the reverted one capped LENGTH, which is what made the model
+    // drop qualifiers and merge figures across rows. This one requires
+    // CONTENT — every part named must carry its figures — and the length
+    // rule above it was loosened, not tightened, so a three-part question
+    // is no longer being squeezed into one sentence.
     private static func instructions(for names: [String]) -> String {
         """
         You are a banking assistant answering the user's question with the \
@@ -405,8 +483,16 @@ final class ToolExecutionAgent {
         this is someone's money.
 
         Answer in one or two short sentences, in plain language, using the \
-        exact figures the tools return. If a tool comes back empty, say so \
-        plainly rather than filling the gap.
+        exact figures the tools return — a sentence longer when the \
+        question has several parts, because every part still needs its \
+        own figures. If a tool comes back empty, say so plainly rather \
+        than filling the gap.
+
+        NEVER ANNOUNCE WHAT YOU ARE ABOUT TO SHOW. "Here are your recent \
+        transactions, pending payments, and scheduled payments." is not \
+        an answer — it names the three things asked for and gives none of \
+        them. If you name something the customer asked about, its figures \
+        belong in that same sentence.
         """
     }
 

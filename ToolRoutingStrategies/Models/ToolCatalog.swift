@@ -103,7 +103,7 @@ enum ToolCatalog {
             category: .accounts,
             description: "Show the user's bank statement for a given month or period.",
             notFor: "listing individual transactions inline (use list_transactions)",
-            argumentHint: "the period and account in plain text, e.g. 'June', 'last month, checking'",
+            argumentHint: "the period, plus which account: checking, savings, credit card, or all when the question names none",
             exampleQueries: [
                 "Get my bank statement for June", "Show last month's statement", "Download my checking account statement",
                 "june stmt", "last months statement"

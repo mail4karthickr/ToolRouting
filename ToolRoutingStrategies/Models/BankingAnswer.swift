@@ -35,13 +35,18 @@ struct BankingAnswer: Codable, Sendable {
     /// SUBJECT: what the assistant actually replied.
     var answer: String = ""
 
-    /// What the tools actually return, from MockBankAPIClient. Filled in
-    /// on the SUBJECT side at evaluation time (see the evaluation's
-    /// `subject(from:)`), never stored in a dataset and never written by
-    /// a model — it is derived from the API every run, so it cannot go
-    /// stale against the mock and cannot be hallucinated.
+    /// What THIS RUN's tool calls returned, collected from the routing
+    /// trace. Filled in on the SUBJECT side at evaluation time (see the
+    /// evaluation's `subject(from:)` and `observedToolOutput`), never
+    /// stored in a dataset and never written by a model — it comes off
+    /// the calls the agent really made, so it cannot go stale against the
+    /// mock and cannot be hallucinated.
     ///
-    /// Every number an answer is entitled to use lives in here.
+    /// Every number an answer is entitled to use lives in here. That is
+    /// only true because the source is the ACTUAL calls: filled from the
+    /// expected plan instead, as it was until 2026-08-12, it was the set
+    /// of numbers a CORRECT run would have been entitled to, which is a
+    /// different set on exactly the samples that are failing.
     var toolOutput: String = ""
 
     /// Parallel to `tools`: the argument each one should be called with

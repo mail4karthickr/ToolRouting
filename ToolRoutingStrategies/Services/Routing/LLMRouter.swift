@@ -188,13 +188,24 @@ final class LLMRouter: ToolRouter {
         baseline = session.transcript
         self.session = session
         sessionsBuilt += 1
+        // The reuse tripwire, in the log rather than only in a test: this
+        // should appear exactly once per launch. A second one means the
+        // session is being rebuilt per request and every selection is
+        // paying a cold prefill for instructions that never change.
+        Log.stage2.info("session built (#\(sessionsBuilt), \(Self.policy.count) chars of instructions)")
+        if sessionsBuilt > 1 {
+            Log.stage2.warning("session rebuilt \(sessionsBuilt)× — the instruction prefill is no longer being reused")
+        }
         return session
     }
 
     // MARK: Prewarm
 
     func prewarm() {
-        guard unavailabilityMessage == nil else { return }
+        guard unavailabilityMessage == nil else {
+            Log.stage2.warning("prewarm skipped — on-device model unavailable: \(unavailabilityMessage ?? "")")
+            return
+        }
         // Pages the base model in — the dominant cold-start cost — and
         // now also prefills the instructions the session keeps for good.
         warmSession().prewarm()
@@ -328,6 +339,8 @@ final class LLMRouter: ToolRouter {
     /// catalog, and it is why Recall@5 bounds the pipeline honestly.
     func select(_ query: String, from candidates: [ToolDefinition]) async throws -> RoutingPlan {
         let session = warmSession()
+        let clock = ContinuousClock()
+        let start = clock.now
 
         // Back to instructions-only before every selection. Routing is
         // classification, and a classifier that can see the last three
@@ -337,24 +350,53 @@ final class LLMRouter: ToolRouter {
         // one's. Reuse buys the warm prefill; it must not buy history.
         session.transcript = baseline
 
-        let response = try await session.respond(
-            to: Self.prompt(for: query, candidates: candidates),
-            schema: try Self.schema(for: candidates),
+        let prompt = Self.prompt(for: query, candidates: candidates)
+        // The candidate list is the ENTIRE per-request cost of this stage
+        // and the one thing that must stay O(k). The character count is
+        // the cheap tripwire for the whole-catalog prompt creeping back
+        // in — it should track `k`, never the catalog.
+        Log.stage2.debug("""
+            select over \(candidates.count) candidate(s) \(candidates.map(\.displayName)), \
+            prompt \(prompt.count) chars
+            """)
+        Log.stage2.trace("prompt: \(prompt.loggable(4000))")
+
+        let response: LanguageModelSession.Response<GeneratedContent>
+        do {
+            response = try await session.respond(
+                to: prompt,
+                schema: try Self.schema(for: candidates),
             // The prompt already lists these tools, with descriptions the
             // schema does not carry. Injecting the schema too would say
             // the names a second time in a less readable form.
-            includeSchemaInPrompt: false,
-            options: GenerationOptions(sampling: .greedy) // routing is classification; greedy makes it reproducible
-        )
+                includeSchemaInPrompt: false,
+                options: GenerationOptions(sampling: .greedy) // routing is classification; greedy makes it reproducible
+            )
+        } catch {
+            // Includes the refusals and guardrail trips the callers turn
+            // into escalations. They are a normal outcome upstream, so
+            // this is the only place the underlying error is written down.
+            Log.stage2.error("respond FAILED after \((clock.now - start).logged): \(error)")
+            throw error
+        }
         lastUsage = TokenUsage(
             input: response.usage.input.totalTokenCount,
             output: response.usage.output.totalTokenCount
         )
 
-        return RoutingPlan(
+        let plan = RoutingPlan(
             reasoning: (try? response.content.value(String.self, forProperty: Self.reasoningProperty)) ?? "",
             toolNames: try response.content.value([String].self, forProperty: Self.toolsProperty)
         )
+        // Input and output separately, because they respond to different
+        // fixes: input is the k tool descriptions, output is generation,
+        // and only the second one is where this stage's seconds go.
+        Log.stage2.info("""
+            plan \(plan.toolNames) in \((clock.now - start).logged) \
+            (in \(lastUsage?.input ?? -1) tok, out \(lastUsage?.output ?? -1) tok)\
+            \(plan.isAbstention ? " — ABSTAIN" : "")
+            """)
+        return plan
     }
 
     // MARK: Output schema (built per request, from the candidates only)
@@ -504,6 +546,17 @@ final class LLMRouter: ToolRouter {
     /// is generation: removing ~26 output tokens saved 644ms, while ~450
     /// cached input tokens cost almost nothing. Trim here for headroom as
     /// the catalog or topK grows; trim the OUTPUT to go faster.
+    // TRIED AND REVERTED, 2026-08-12. A "CHECK 1 — does it name a
+    // place?" step was promoted to the very front of this policy, ahead
+    // of the verb decision, aiming at sample 59 (a named place buried in
+    // a three-part request). It made the named-place test the lens every
+    // request was read through: "how late is the nearest branch open?"
+    // and "give me my account number, routing number, and debit card
+    // number" both escalated to `none` — the second names no location at
+    // all. Two working samples lost, 59 not fixed. The named-place rule
+    // works where it sits now, further down; sample 14 was fixed by
+    // resolving its contradiction with the branch-chain paragraph, not by
+    // reordering.
     private static let policy = """
             You are the tool router for a banking assistant.
 
@@ -558,6 +611,15 @@ final class LLMRouter: ToolRouter {
             Answer `none` too when you cannot tell what is being asked, or \
             the request could mean several things and picking wrong would \
             show the customer the wrong account or amount.
+
+            A question that COMPARES two amounts needs a tool for each \
+            side, including the side the user did not spell out. "Do I \
+            have enough in checking to cover the rent payment?" needs \
+            account_balance AND scheduled_payments: the rent amount is a \
+            fact to look up, not a number you already know. Answering \
+            from the balance alone means asserting a comparison against a \
+            figure nobody fetched. The same goes for "can I afford", "is \
+            that more than", "will it cover" — find the second amount.
 
             Otherwise pick the fewest tools that fully answer the query, \
             and include a tool whose result another one needs: "find the \

@@ -74,6 +74,29 @@ enum CardType {
     case all
 }
 
+extension AccountType {
+    /// What `BankAPIClient` takes. Same reasoning as ``CardType/apiValue``:
+    /// the API layer stays on `String`, but the string comes from a closed
+    /// set rather than from the model.
+    ///
+    /// `all` is the one that matters. `bank_statement` had no way to say
+    /// it — its argument was free text and the mock interpolated whatever
+    /// arrived — so "get my June statement", which names no account, left
+    /// the agent a choice between guessing one and calling the tool three
+    /// times. It called it three times (eval 2026-08-12, sample 33),
+    /// which is exactly what ToolExecutionAgent's instructions tell it NOT
+    /// to do — but those instructions say to use "all" when the tool takes
+    /// it, and this one did not.
+    var apiValue: String {
+        switch self {
+        case .checking: "checking"
+        case .savings: "savings"
+        case .creditCard: "credit card"
+        case .all: "all"
+        }
+    }
+}
+
 extension CardType {
     /// What `BankAPIClient` takes.
     ///

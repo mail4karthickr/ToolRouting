@@ -23,9 +23,10 @@ because the judge is TOLD whether a reply was owed — silence looks
 identical either way, and inferring it from the silence is what the
 earlier prompt got wrong.
 
-The tool output each answer is graded against is re-derived per run from
-the sample's expected tools rather than stored, so it tracks the mock's
-fixed values. The judge is Claude,
+The tool output each answer is graded against is the output of the calls
+the agent REALLY made, collected from the run's own trace rather than
+stored or re-derived from the expectation — see `observedToolOutput`,
+which is where that used to be wrong. The judge is Claude,
 reached through the Foundation Models server-side model API — a different
 and more capable model than the on-device one that wrote the answer, so
 the score is not self-assessment.
@@ -164,19 +165,13 @@ struct HybridAnswerEvaluation: Evaluation {
     var onSubject: (@Sendable (String, BankingAnswer) -> Void)?
 
     func subject(from sample: ModelSample<BankingAnswer>) async throws -> ModelSubject<BankingAnswer> {
-        let expected = sample.expected
-        let truth = await MockGroundTruth.toolOutput(
-            tools: expected?.tools ?? [],
-            arguments: expected?.arguments ?? []
-        )
-
         let router = await HybridRouter()
         do {
             let result = try await router.route(sample.promptDescription)
             let answer = BankingAnswer(
                 tools: result.calls.isEmpty ? ["none"] : result.calls.map(\.tool.displayName),
                 answer: result.answer ?? "",
-                toolOutput: truth,
+                toolOutput: Self.observedToolOutput(in: result),
                 note: result.reasoning ?? "",
                 executedTools: result.executedTools
             )
@@ -194,10 +189,65 @@ struct HybridAnswerEvaluation: Evaluation {
             // overflow would have scored as a well-judged `none`. Anything
             // else now propagates and the sample errors out, which is what
             // a failure should look like in a report.
-            let abstention = BankingAnswer(tools: ["none"], toolOutput: truth)
+            //
+            // No tool output, because no tool ran. It used to carry the
+            // expected plan's output here, which told the judge that
+            // figures were available to an answer that never existed.
+            let abstention = BankingAnswer(tools: ["none"])
             onSubject?(sample.promptDescription, abstention)
             return ModelSubject(value: abstention)
         }
+    }
+
+    /// What the agent's tools returned THIS RUN, named tool by tool.
+    ///
+    /// This is the string the judge scores Faithfulness against, so it
+    /// has to be the output of the calls that actually produced the
+    /// answer.
+    ///
+    /// MEASURED, 2026-08-12. It used to be re-derived from the sample's
+    /// EXPECTED tools — `MockGroundTruth.toolOutput(tools: expected.tools)`
+    /// — and handed to the judge under the label "What the tools actually
+    /// returned", which is not what it was. Wherever routing diverged
+    /// from the expectation the judge was grading an answer against a
+    /// different set of tool outputs than the one that produced it, and a
+    /// failing subset is made of nothing but such samples:
+    ///
+    ///   ILL-POSED   Sample 8 expects `none`, so the derived output was
+    ///               EMPTY while the agent had really called four tools
+    ///               and fetched real figures. Asked whether an answer
+    ///               full of numbers was traceable to "nothing", the
+    ///               judge scored Faithfulness 1, then 4, then 3 on three
+    ///               consecutive runs of the same unchanged defect —
+    ///               ±0.33 on the reported mean from one sample.
+    ///   BACKWARDS   The dangerous direction, and the reason this is a
+    ///               correctness fix rather than a tidying one. An agent
+    ///               that skips a tool and invents its figures was graded
+    ///               against expected output CONTAINING those figures, so
+    ///               the invention read as grounded. A fabrication check
+    ///               that clears fabrications is worse than no check.
+    ///
+    /// Whether the RIGHT tools ran is Completeness's question, and
+    /// LLMRouterTests grades selection on its own. Keeping them apart is
+    /// the point: a wrong tool read honestly and a right tool answered
+    /// dishonestly are different defects with different fixes, and one
+    /// number that moves for both explains neither.
+    ///
+    /// Each chunk names its tool because Faithfulness is a question about
+    /// attribution — sample 7 reported scheduled payments as pending, and
+    /// that is only visible to a judge that can see which tool returned
+    /// which rows.
+    static func observedToolOutput(in result: RoutingResult) -> String {
+        (result.trace.execution?.invocations ?? [])
+            .compactMap { invocation in
+                let output = invocation.output?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                // A call whose output never came back is not evidence of
+                // anything, and printing "x returned:" with nothing after
+                // it invites the judge to read the blank as a value.
+                return output.isEmpty ? nil : "\(invocation.toolName) returned: \(output)"
+            }
+            .joined(separator: "\n")
     }
 
     // MARK: Metrics
@@ -340,11 +390,23 @@ struct HybridAnswerEvaluation: Evaluation {
 struct HybridRouterTests {
     /// TEMPORARY — which bundled dataset this eval runs.
     ///
-    /// `failing_banking_qa` is the 20 samples the 2026-08-12 08:30 run got
-    /// wrong, lifted from `synthetic_banking_qa` with their expectations
-    /// kept current. It exists to make the fix loop short: 20 samples
-    /// instead of 60 is a third of the wall clock, and every one of them
-    /// is a known defect, so a score that moves means something moved.
+    /// `failing_banking_qa` holds whatever is currently failing, lifted
+    /// from `synthetic_banking_qa` so its expectations can never drift
+    /// from the source. It exists to make the fix loop short, and it gets
+    /// re-cut as samples are fixed:
+    ///
+    ///   20 samples  the 2026-08-12 08:30 failures — synthetic indices
+    ///               3, 7, 11, 14, 19, 21, 23, 26, 27, 29, 31, 33, 35,
+    ///               39, 47, 49, 50, 51, 58, 59. About 6 minutes.
+    ///    9 samples  re-cut after run 7 — 3, 26, 27, 29, 31, 39, 47, 51,
+    ///               59. About 3 minutes.
+    ///
+    /// EVERY RE-CUT NARROWS WHAT IS WATCHED. The 11 dropped in the second
+    /// cut no longer run, so a regression in one of them is invisible
+    /// here — the same trade as running 20 of 60, one level deeper. Two of
+    /// today's changes had to be reverted for breaking samples that WERE
+    /// still in the set; a narrower set would have hidden them. Re-cut to
+    /// move faster, then run the full dataset before believing anything.
     ///
     /// NOTHING MEASURED ON IT IS A ROUTER SCORE. It is the failures only,
     /// so its mean is bounded far below the real one and cannot be

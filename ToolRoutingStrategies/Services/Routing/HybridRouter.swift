@@ -65,6 +65,11 @@ final class HybridRouter: ToolRouter {
     private let agent = ToolExecutionAgent()
     private let config = Config()
 
+    /// Numbers the requests, so every line one question writes across all
+    /// three stages carries the same `#n` in the log. Incremented on the
+    /// main actor, where routing is serialized, so no two runs share one.
+    private var requestCount = 0
+
     var unavailabilityMessage: String? { selector.unavailabilityMessage }
 
     /// Called when the chat screen appears. Every stage builds whatever
@@ -72,6 +77,7 @@ final class HybridRouter: ToolRouter {
     /// build their ONE session now, so no request ever pays for
     /// constructing one.
     func prewarm() {
+        Log.hybrid.info("prewarm: topK=\(config.topK), catalog=\(ToolCatalog.all.count) tools")
         retriever.prewarm() // MiniLM weights + tool index
         selector.prewarm()  // base LLM weights + the selection session
         agent.prewarm()     // the agent session, with every tool bound
@@ -92,7 +98,21 @@ final class HybridRouter: ToolRouter {
     /// `onUpdate` is non-escaping and called on this actor, so the UI can
     /// assign to its own state inside the handler with no hop and no
     /// window where the model has moved on but the screen hasn't.
+    ///
+    /// The run is wrapped in a `LogContext` request ID: every line the
+    /// three stages, the tools and the view model write while it is in
+    /// flight is tagged `#n`, so one question can be lifted out of a log
+    /// holding a whole session's worth of them.
     func route(_ query: String, onUpdate: (RoutingUpdate) -> Void) async throws -> RoutingResult {
+        requestCount += 1
+        return try await LogContext.$requestID.withValue(requestCount) {
+            try await run(query, onUpdate: onUpdate)
+        }
+    }
+
+    private func run(_ query: String, onUpdate: (RoutingUpdate) -> Void) async throws -> RoutingResult {
+        Log.hybrid.info("▶ route: \"\(query.loggable())\"")
+
         // Every stage is timed and recorded into `trace` as it completes,
         // so an early return carries the account of everything that ran
         // before it. The UI reads this to show what happened; nothing in
@@ -103,14 +123,33 @@ final class HybridRouter: ToolRouter {
         // Stage 1 — retrieval. Milliseconds, no generation.
         onUpdate(.retrieving)
         let retrievalStart = clock.now
-        let retrieval = try await retriever.rank(query, topK: config.topK)
+        let retrieval: MiniLMRouter.Retrieval
+        do {
+            retrieval = try await retriever.rank(query, topK: config.topK)
+        } catch {
+            // The only stage that can fail outright — no index, or the
+            // embedding weights never downloaded. It throws to the view
+            // model, so this is the one place the reason is recorded.
+            Log.hybrid.error("stage 1 FAILED after \((clock.now - retrievalStart).logged): \(error)")
+            throw error
+        }
         let shortlist = retrieval.shortlist
-        trace.retrieval = stage(from: retrieval, duration: clock.now - retrievalStart)
+        let retrievalDuration = clock.now - retrievalStart
+        trace.retrieval = stage(from: retrieval, duration: retrievalDuration)
+
+        Log.hybrid.info("stage 1 ✓ \(retrievalDuration.logged) → shortlist \(Self.describe(shortlist))")
 
         // Abstention door #1 (cheap): nothing cleared the similarity
         // threshold, so the LLM never runs. Empty calls = abstain; the
         // caller's policy (ToolRoutingViewModel) sends it to the cloud.
         guard !shortlist.isEmpty else {
+            // The near-misses are the diagnostic: a best score just under
+            // the threshold is a number to tune, one at 0.2 is a tool
+            // description that does not sound like the question.
+            Log.hybrid.warning("""
+                ABSTAIN — nothing cleared threshold \(retriever.similarityThreshold); \
+                best was \(Self.describe(Array(retrieval.ranked.prefix(3)))). Escalating to cloud.
+                """)
             return RoutingResult(
                 strategyName: strategyName,
                 reasoning: "No tool cleared the similarity threshold; the LLM stage was skipped.",
@@ -123,6 +162,13 @@ final class HybridRouter: ToolRouter {
         // returns names; the selector wants the definitions whose text
         // goes in the prompt.
         let candidateTools = shortlist.compactMap { ToolCatalog.byName[$0.toolName] }
+        if candidateTools.count != shortlist.count {
+            // A retrieved name with no catalog entry means the persisted
+            // index outlived the tool it was built from — the fingerprint
+            // is supposed to make that impossible.
+            let missing = Set(shortlist.map(\.toolName)).subtracting(candidateTools.map(\.displayName))
+            Log.hybrid.error("shortlist holds \(missing.sorted()) with no ToolCatalog entry — stale index?")
+        }
         onUpdate(.selecting)
         let selectionStart = clock.now
         let plan: LLMRouter.RoutingPlan
@@ -139,6 +185,10 @@ final class HybridRouter: ToolRouter {
             // No token usage recorded: `lastUsage` holds the PREVIOUS
             // request's numbers when a call throws, and a stale figure
             // attributed to this turn is worse than a missing one.
+            Log.hybrid.warning("""
+                stage 2 DECLINED after \((clock.now - selectionStart).logged) (\(error)) — \
+                guardrail or refusal, treated as `none`. Escalating to cloud.
+                """)
             trace.selection = RoutingTrace.SelectionStage(
                 candidates: candidateTools.map(\.displayName),
                 reasoning: nil,
@@ -162,6 +212,12 @@ final class HybridRouter: ToolRouter {
         // Read here, with no suspension between this and the call above,
         // so it cannot belong to a different request.
         let selectionUsage = selector.lastUsage
+
+        Log.hybrid.info("""
+            stage 2 ✓ \(selectionDuration.logged) → \(plan.toolNames) \
+            (in \(selectionUsage?.input ?? -1) tok, out \(selectionUsage?.output ?? -1) tok)
+            """)
+        Log.hybrid.debug("stage 2 reasoning: \(plan.reasoning.isEmpty ? "—" : plan.reasoning.loggable())")
 
         // Records Stage 2 with whatever policy fired on it. Policy notes
         // are the bridge between the model's output and the result: a
@@ -205,6 +261,7 @@ final class HybridRouter: ToolRouter {
         // ungeneratable. The grammar and the prompt finally agree, and
         // Recall@5 bounds this pipeline for real rather than by policy.
         guard !plan.toolNames.contains(ToolName.none.displayName) else {
+            Log.hybrid.info("POLICY escalate → cloud: \(LLMRouter.escalationNote(for: plan))")
             recordSelection([LLMRouter.escalationNote(for: plan)])
             return RoutingResult(
                 strategyName: strategyName,
@@ -225,6 +282,9 @@ final class HybridRouter: ToolRouter {
         let routedCalls = LLMRouter.routedCalls(for: plan, query: query, scores: scoreByTool)
 
         let duplicates = plan.toolNames.count - routedCalls.count
+        if duplicates > 0 {
+            Log.hybrid.warning("POLICY dropped \(duplicates) duplicate pick(s) from \(plan.toolNames)")
+        }
         recordSelection(duplicates > 0
             ? ["Dropped \(duplicates) tool\(duplicates == 1 ? "" : "s") the model named twice."]
             : [])
@@ -236,9 +296,26 @@ final class HybridRouter: ToolRouter {
         let uniqueCalls = routedCalls.map(\.tool)
         let boundTools = uniqueCalls.map(\.displayName).filter { $0 != ToolName.none.displayName }
         onUpdate(.answering)
+        Log.hybrid.info("stage 3 ▶ binding \(boundTools)")
         let executionStart = clock.now
         do {
             let answer = try await agent.answer(query, using: uniqueCalls, onUpdate: onUpdate)
+            let executionDuration = clock.now - executionStart
+
+            // PLANNED vs EXECUTED is the single most useful comparison in
+            // this file. The agent is instructed to call every routed
+            // tool, so a difference is a defect — a skipped call, or a
+            // chain the model reordered into something that could not
+            // work — and it is invisible in the answer text.
+            if answer.executedTools != boundTools {
+                Log.hybrid.warning("plan ≠ execution: planned \(boundTools), called \(answer.executedTools)")
+            }
+            Log.hybrid.info("""
+                stage 3 ✓ \(executionDuration.logged) → called \(answer.executedTools), \
+                ttft \(answer.timeToFirstToken?.logged ?? "—"), prompt \(answer.promptTokens ?? -1) tok
+                """)
+            Log.hybrid.info("◀ answer: \(answer.text.loggable())")
+
             trace.execution = RoutingTrace.ExecutionStage(
                 boundTools: boundTools,
                 invocations: answer.invocations,
@@ -246,7 +323,7 @@ final class HybridRouter: ToolRouter {
                 failure: nil,
                 timeToFirstToken: answer.timeToFirstToken,
                 promptTokens: answer.promptTokens,
-                duration: clock.now - executionStart
+                duration: executionDuration
             )
             return RoutingResult(
                 strategyName: strategyName,
@@ -261,6 +338,9 @@ final class HybridRouter: ToolRouter {
             // the chosen tools beats an error — but record WHY. Swallowing
             // this made an agent failure look identical to a router that
             // simply produced no answer, which cost a diagnostic run.
+            Log.hybrid.error("""
+                stage 3 FAILED after \((clock.now - executionStart).logged) with \(boundTools) bound: \(error)
+                """)
             trace.execution = RoutingTrace.ExecutionStage(
                 boundTools: boundTools,
                 invocations: [],
@@ -280,6 +360,14 @@ final class HybridRouter: ToolRouter {
     }
 
     // MARK: Trace
+
+    /// `account_balance 0.71, list_transactions 0.63` — the scores, in
+    /// rank order, short enough to sit on one log line.
+    private static func describe(_ tools: [MiniLMRouter.RetrievedTool]) -> String {
+        tools
+            .map { "\($0.toolName) \(String(format: "%.2f", $0.score))" }
+            .joined(separator: ", ")
+    }
 
     private func stage(
         from retrieval: MiniLMRouter.Retrieval,

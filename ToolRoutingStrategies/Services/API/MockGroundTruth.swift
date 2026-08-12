@@ -84,14 +84,26 @@ enum MockGroundTruth {
                 return "\(try await client.rewardPoints().formatted()) reward points"
             case "interest_earned":
                 return try await client.interestEarned(accountType: fallback(argument, "savings"))
+            // Each of these defers to the tool that serves it at runtime,
+            // rather than re-joining the client's rows the way the tool
+            // happens to. Two implementations of "what does this tool
+            // return" is the drift this file exists to prevent.
             case "fees_and_charges":
-                return try await client.feesAndCharges(accountType: fallback(argument, "all")).joined(separator: "\n")
+                return try await FeesAndChargesTool(client: client)
+                    .call(arguments: AccountArgument(account: fallback(argument, "all")))
             case "pending_payments":
-                return try await client.pendingPayments(accountType: fallback(argument, "all")).joined(separator: "\n")
+                return try await PendingPaymentsTool(client: client)
+                    .call(arguments: AccountArgument(account: fallback(argument, "all")))
             case "scheduled_payments":
-                return try await client.scheduledPayments(accountType: fallback(argument, "all")).joined(separator: "\n")
+                return try await ScheduledPaymentsTool(client: client)
+                    .call(arguments: AccountArgument(account: fallback(argument, "all")))
             case "bank_statement":
-                return try await client.bankStatement(month: fallback(argument, "last month"), accountType: "checking")
+                // "all" rather than "checking": the dataset's single argument slot
+                // carries the PERIOD, so the account was never expressed here.
+                // Hardcoding checking made the grounding narrower than the
+                // question, which is what an unqualified "get my June
+                // statement" should return.
+                return try await client.bankStatement(month: fallback(argument, "last month"), accountType: "all")
             case "get_dispute_status":
                 return try await client.disputeStatus(merchant: fallback(argument, "all"))
             case "branch_hours":
@@ -119,7 +131,14 @@ enum MockGroundTruth {
             case "list_transactions":
                 let days = Int(argument) ?? 7
                 let transactions = try await client.listTransactions(days: days)
-                return transactions.map(Self.line(for:)).joined(separator: "\n")
+                // THE TOOL'S OWN SUMMARISER, not a copy of it. The judge is
+                // shown this string as "what the tools actually returned"
+                // and scores Faithfulness against it, so a second
+                // implementation here would grade the agent against output
+                // it never saw — the row format this replaced was exactly
+                // that kind of duplicate, and it drifted the moment
+                // ListTransactionsTool stopped emitting rows.
+                return ListTransactionsTool.summary(of: transactions, days: days)
             case "search_transactions":
                 let transactions = try await client.searchTransactions(merchant: fallback(argument, "Starbucks"))
                 guard !transactions.isEmpty else { return nil }

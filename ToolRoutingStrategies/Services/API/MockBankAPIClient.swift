@@ -37,8 +37,25 @@ struct MockBankAPIClient: BankAPIClient {
         }
     }
 
+    /// An explicit `all`, like `accountBalance` and `cardLimits`.
+    ///
+    /// This used to interpolate whatever arrived straight into the
+    /// sentence, so there was no value meaning "every account" — "the all
+    /// account is ready" is not an answer. Faced with a question naming no
+    /// account, the agent called the tool once per account instead, which
+    /// its own instructions forbid. Giving the argument an `all` is what
+    /// makes the single call possible.
     func bankStatement(month: String, accountType: String) async throws -> String {
-        "The \(month) statement for the \(accountType) account is ready and available under Documents."
+        switch accountType.lowercased() {
+        case let type where type.contains("sav"):
+            return "The \(month) statement for the savings account is ready and available under Documents."
+        case let type where type.contains("credit"):
+            return "The \(month) statement for the credit card account is ready and available under Documents."
+        case let type where type.contains("check"):
+            return "The \(month) statement for the checking account is ready and available under Documents."
+        default:
+            return "The \(month) statements for the checking, savings and credit card accounts are all ready and available under Documents."
+        }
     }
 
     func creditScore() async throws -> Int {
