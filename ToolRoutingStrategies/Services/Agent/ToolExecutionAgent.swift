@@ -19,8 +19,16 @@ import FoundationModels
 //
 // Note the plan is not replayed mechanically: the model still decides
 // the order and fills in every argument. That is deliberate — only the
-// model can fill `find_atm(location:)` with the string `get_location`
-// just returned. Routing narrows the field; the agent does the last mile.
+// model can fill `find_nearest_atm(latitude:longitude:)` with the
+// coordinates `get_location` just returned. Routing narrows the field;
+// the agent does the last mile.
+//
+// Those arguments being numbers is what makes the ordering hold. When
+// this took a `location: String` the model could satisfy it with the
+// literal "current location" and never call get_location at all, which
+// is what it did on eval sample 7 (2026-08-12). A latitude it has not
+// been given is not something guided decoding can fabricate its way
+// past.
 //
 // WHICH tools run is not its decision, though. The instructions tell it
 // to call all of them, so a tool that routing selected and the
@@ -39,132 +47,175 @@ import FoundationModels
 // So there are two different tool lists, and the distinction is the whole
 // trick:
 //
-//   bound at init   every tool — what a call can DISPATCH to
-//   in the entry    the routed plan — what the model can SEE, and the
-//                   only one of the two that costs prompt tokens
+//   bound at init   the routed plan, and nothing else
+//   in the prompt   the same list, because they are the same list
 //
-// The O(plan) property the routing stages exist to buy is preserved by
-// the second list. If a change ever makes the prompt carry the first one,
-// the cascade is still running but paying for nothing — `promptTokens` in
-// StreamingTests is the tripwire for that.
+// THEY MUST BE THE SAME LIST. For a few hours on 2026-08-11 they weren't:
+// the session bound all twenty tools so it could be long-lived, and only
+// the transcript's instructions entry was narrowed to the plan. That
+// controls what the model SEES, not what it can CALL, and the eval caught
+// it immediately — a turn that planned `pending_payments` dispatched
+// `search_transactions`, a tool it had never been shown.
+//
+// So the plan binds execution now, and the session is rebuilt per
+// request because `tools` is fixed at `init` and the plan is not. The
+// O(plan) property the routing stages exist to buy falls out of that
+// rather than being maintained separately; `promptTokens` in
+// StreamingTests is still the tripwire if it ever stops holding.
 
 @MainActor
 final class ToolExecutionAgent {
     private let client: any BankAPIClient
 
-    /// Bound on every request, unlike the routed tools. Whether an answer
-    /// needs arithmetic is only knowable after the figures come back,
-    /// which is after both routing stages have run — see the header of
-    /// ComputeTool for why it is kept out of the catalog.
-    private let compute = ComputeTool()
-
-    /// The one session. Nil until `prewarm()` or the first request builds
-    /// it.
-    private var session: LanguageModelSession?
-
-    /// Every bound tool's definition, keyed by name, so a turn can pick
-    /// out the handful it wants to show without rebuilding schemas.
-    private var definitions: [String: Transcript.ToolDefinition] = [:]
-
-    /// The question being answered right now. `compute` is wired once, in
-    /// `init`, but its allowed operands include the user's own words —
-    /// which change every turn — so the closure reads this rather than
-    /// capturing a query that was current when the session was built.
-    private var currentQuery = ""
-
-    /// How many sessions this agent has built. The reuse tripwire: it
-    /// should read 1 after prewarm and stay there for the life of the
-    /// app, however many questions are asked.
+    /// How many sessions this agent has built — one per request, by
+    /// design. Kept because it is the counter that would catch someone
+    /// making this persistent again without reading why it isn't.
     private(set) var sessionsBuilt = 0
+
+    /// The conversation so far, as `.prompt` and `.response` entries only.
+    ///
+    /// THE CONVERSATION IS CARRIED; THE TOOLBOX IS NOT. Each turn seeds a
+    /// new session with this history and binds ONLY that turn's routed
+    /// tools, so "what about last month?" has context while the tools
+    /// available never accumulate — a question that routed to
+    /// account_balance three turns ago does not leave account_balance
+    /// callable now. Those are separate things, and conflating them is
+    /// what a single long-lived session would do.
+    ///
+    /// TOOL CALLS AND OUTPUTS ARE DELIBERATELY DROPPED. Carrying them
+    /// would put last turn's figures back in context where the model can
+    /// reuse them as though they were fresh. A balance from four questions
+    /// ago is exactly the kind of stale fact this app must not restate.
+    /// The assistant's own replies come along, so the thread still reads
+    /// as a conversation.
+    private var history: [Transcript.Entry] = []
+
+    /// How many past entries to carry — prompts and responses, so this is
+    /// six exchanges. A cap rather than a choice about memory: the window
+    /// is ~4,096 tokens shared with the instructions, the tool schemas and
+    /// this turn's own output, and an unbounded thread would eventually
+    /// take the whole budget and start failing turns that used to work.
+    private static let historyEntryLimit = 12
 
     init(client: any BankAPIClient = MockBankAPIClient()) {
         self.client = client
-        // Wired once here instead of per request. `compute` can only ever
-        // calculate with figures the tools actually returned — without
-        // this it would launder an invented operand into a
-        // verified-looking result, since its own output is what the
-        // verifier trusts.
-        compute.allowedSources = { [weak self] in
-            guard let self, let session else { return [] }
-            return AnswerVerifier.toolOutputs(in: session.transcript) + [currentQuery]
-        }
     }
 
     // MARK: Session
 
-    /// Builds the session on first use and hands back the same one
-    /// forever after.
-    @discardableResult
-    private func warmSession() -> LanguageModelSession {
-        if let session { return session }
+    /// A session bound to EXACTLY the routed tools, and nothing else.
+    ///
+    /// ONE PER REQUEST, and that is forced by the framework: a session's
+    /// `tools` are fixed at `init`, while the plan changes every request.
+    /// The two cannot both be satisfied by a long-lived session, and when
+    /// they conflict, binding wins.
+    ///
+    /// MEASURED, 2026-08-11, on the wrong side of that trade. This agent
+    /// briefly kept ONE session with all twenty tools bound, narrowing
+    /// only the `toolDefinitions` in the transcript's instructions entry.
+    /// That controls what the model is SHOWN; it does not control what it
+    /// can CALL. Eval sample 6 ("how much did i spend at uber") planned
+    /// `pending_payments`, then dispatched `search_transactions` — a tool
+    /// it had never been shown — and happened to answer correctly, which
+    /// masked the bad plan in every place except the eval.
+    ///
+    /// So the routed plan now BINDS execution. An unrouted tool is not
+    /// merely unlisted, it is absent, and a call to it has nowhere to go.
+    /// Same shape of guarantee as Stage 2's per-request output schema:
+    /// each stage can only reach what the stage before it handed over.
+    ///
+    /// The cost of rebuilding this per request is small, and smaller than
+    /// it looks: these instructions name the routed tools, so they differ
+    /// every turn and a persistent session was never reusing their
+    /// prefill. It saved allocating an object and building twenty
+    /// `Transcript.ToolDefinition`s, most of them unused. The model
+    /// weights — the part that actually costs seconds — are paged in
+    /// process-wide by `prewarm()` and stay warm across sessions.
+    private func makeSession(for names: [String], tools: [any Tool]) -> LanguageModelSession {
+        // EXACTLY the routed tools. `compute` used to be appended here on
+        // every request, on the reasoning that whether an answer needs
+        // arithmetic is only knowable after the figures come back. True,
+        // but it made the tool unroutable: no selection could withhold
+        // it, so it was in reach for all 60 samples whether or not the
+        // question involved arithmetic.
+        //
+        // MEASURED, 2026-08-12, on the failing-sample run: `compute`
+        // appeared in 9 of 20 trajectories and was the source of every
+        // invented headline figure — a $5,435.90 "balance" on a question
+        // whose account_balance call never happened, $4,190.12 of "June
+        // spending" for a request that only wanted the statement, an
+        // $11,665.54 all-accounts total standing in for the checking
+        // balance. The figures were not even stable between runs. The
+        // pattern was always the same: arithmetic nobody asked for,
+        // reported IN PLACE OF the figure that was asked for.
+        //
+        // The tools already return the derived values worth having —
+        // search_transactions returns its own total precisely so a small
+        // model is never left adding a column up. What is gone with this
+        // is genuine cross-tool arithmetic ("does checking cover rent"),
+        // which now has to be answered by stating both figures.
+        let bound = tools
 
-        let tools = BankToolRegistry.allTools(client: client) + [compute]
-        definitions = Dictionary(
-            tools.map { ($0.name, Transcript.ToolDefinition(tool: $0)) },
-            uniquingKeysWith: { first, _ in first }
+        // Instructions are built by hand rather than passed to
+        // `init(tools:instructions:)` because the transcript initialiser
+        // is the one that accepts history, and it takes the whole
+        // transcript — instructions entry included. The definitions here
+        // are exactly the bound tools, which is the invariant the whole
+        // change is for: what the model SEES and what it can CALL are one
+        // list, built once, from the plan.
+        let instructions = Transcript.Instructions(
+            segments: [.text(Transcript.TextSegment(content: Self.instructions(for: names)))],
+            toolDefinitions: bound.map { Transcript.ToolDefinition(tool: $0) }
         )
-        // The instructions given here are immediately replaced by the
-        // first turn's. They are not wasted: this is the text the prewarm
-        // prefills, and every turn's instructions share its opening, so
-        // the prefix stays warm.
         let session = LanguageModelSession(
-            tools: tools,
-            instructions: Self.instructions(for: [])
+            tools: bound,
+            transcript: Transcript(entries: [.instructions(instructions)] + history)
         )
-        self.session = session
         sessionsBuilt += 1
         return session
     }
 
-    /// Called when the chat screen appears, so the model is paged in and
-    /// the instruction prefix prefilled before the user's first question
-    /// rather than inside it.
+    /// Called when the chat screen appears. Pages the model in — the
+    /// dominant cold-start cost, and process-wide, so it benefits every
+    /// per-request session built afterwards.
+    ///
+    /// Nothing about THIS turn can be prewarmed: the instructions name
+    /// the routed tools and the tools are the routed tools, and neither
+    /// is known until Stage 2 has run.
     func prewarm() {
-        warmSession().prewarm()
+        LanguageModelSession().prewarm()
     }
 
-    /// Points the session at one turn: these instructions, these visible
-    /// tools, no history.
+    /// Keeps what the user and the assistant SAID, discards how it was
+    /// found out.
     ///
-    /// The reset is deliberate and is what makes reuse safe here. A
-    /// transcript carried across turns would leave LAST turn's tool output
-    /// in context, and `AnswerVerifier` trusts anything a tool returned —
-    /// so yesterday's balance would both be reachable by the model and
-    /// pass verification. Clearing per turn keeps "every figure traces to
-    /// a tool call made for THIS question" true. The session, its bound
-    /// tools, and the warmed weights all survive; only the conversation
-    /// does not.
-    private func beginTurn(_ query: String, showing names: [String]) -> LanguageModelSession {
-        let session = warmSession()
-        let visible = (names + [compute.name]).compactMap { definitions[$0] }
-
-        session.transcript = Transcript(entries: [
-            .instructions(
-                Transcript.Instructions(
-                    segments: [.text(Transcript.TextSegment(content: Self.instructions(for: names)))],
-                    toolDefinitions: visible
-                )
-            )
-        ])
-        currentQuery = query
-        return session
+    /// Called after a turn succeeds, from the session that produced the
+    /// answer.
+    private func remember(_ transcript: Transcript) {
+        history += transcript.filter { entry in
+            switch entry {
+            case .prompt, .response:
+                return true
+            case .instructions, .toolCalls, .toolOutput:
+                // Instructions are rebuilt per turn from that turn's plan.
+                // Calls and outputs are dropped on purpose — see `history`.
+                return false
+            default:
+                // `.reasoning` and anything the framework adds later. If a
+                // future entry kind is worth carrying, decide that
+                // deliberately rather than inheriting it here.
+                return false
+            }
+        }
+        if history.count > Self.historyEntryLimit {
+            history.removeFirst(history.count - Self.historyEntryLimit)
+        }
     }
 
-    /// Rewrites the instructions entry to offer no tools at all, keeping
-    /// everything else in the transcript — including the tool output the
-    /// retry has to copy from.
-    ///
-    /// Entries are rebuilt rather than mutated in place: `Transcript`
-    /// exposes its entries as a collection to read, and swapping the
-    /// first one is clearer than reaching for an index setter.
-    private func withdrawTools(from session: LanguageModelSession) {
-        var entries = Array(session.transcript)
-        guard case .instructions(var instructions) = entries.first else { return }
-
-        instructions.toolDefinitions = []
-        instructions.segments = [.text(Transcript.TextSegment(content: Self.copyOnlyInstructions))]
-        entries[0] = .instructions(instructions)
-        session.transcript = Transcript(entries: entries)
+    /// Forgets the conversation. For a "new chat" affordance, and for
+    /// tests that need a clean agent without building a new one.
+    func clearHistory() {
+        history.removeAll()
     }
 
     // MARK: Result
@@ -189,21 +240,11 @@ final class ToolExecutionAgent {
         /// O(plan) claim: it should track the size of the routed plan, not
         /// the size of the catalog bound to the session.
         let promptTokens: Int?
-        /// The verifier rejected the first draft and this is the retry.
-        var retriedForUnverifiedFigures = false
-        /// The figures that got the first draft rejected, and the draft
-        /// itself. Kept because the retry is the single most expensive
-        /// thing that can happen in a turn — a whole extra generation —
-        /// and `retriedForUnverifiedFigures` alone says it happened
-        /// without saying why, which is not enough to lower the rate.
-        var rejectedFigures: [String] = []
-        var rejectedDraft: String?
     }
 
     enum AgentError: LocalizedError {
         case noExecutableTools([String])
         case emptyReply(plan: [String], executed: [String])
-        case unverifiedFigures(AnswerVerifier.UnverifiedFigures)
 
         var errorDescription: String? {
             switch self {
@@ -214,8 +255,6 @@ final class ToolExecutionAgent {
                 Model returned an empty reply. Planned \(plan.joined(separator: ", ")); \
                 called \(executed.isEmpty ? "nothing" : executed.joined(separator: ", ")).
                 """
-            case .unverifiedFigures(let failure):
-                "Answer failed numeric verification twice. \(failure.localizedDescription)"
             }
         }
     }
@@ -224,11 +263,11 @@ final class ToolExecutionAgent {
 
     /// Runs `plan` against `query` and returns the composed answer.
     ///
-    /// `plan` carries the parameters Stage 2 extracted, but they are not
-    /// passed to the tools directly — the model re-derives each argument
-    /// with the tool's own schema in front of it. The plan's parameters
-    /// are still worth having: they are what the routing UI shows, and
-    /// what an eval grades.
+    /// The plan decides WHICH tools exist for this turn — they are the
+    /// only ones bound to the session — and the model decides how to call
+    /// them, re-deriving every argument from each tool's own schema.
+    /// Stage 2 selects; Stage 3 parameterises and orders. Neither can do
+    /// the other's job, and neither can reach past the one before it.
     ///
     /// `onUpdate` receives the answer as it is written. It defaults to a
     /// no-op so the evals, which want the finished text and nothing else,
@@ -240,67 +279,22 @@ final class ToolExecutionAgent {
         onUpdate: (RoutingUpdate) -> Void = { _ in }
     ) async throws -> Answer {
         let names = plan.map(\.displayName).filter { $0 != ToolName.none.displayName }
-        warmSession()
+
+        // The routed plan, resolved to live tools. THIS LIST IS THE
+        // SESSION'S ENTIRE TOOLBOX — anything absent here cannot be
+        // called, however plausible it looks to the model.
+        let tools = names.compactMap { BankToolRegistry.tool(named: $0, client: client) }
 
         // A plan naming only tools with no implementation cannot be run.
         // Better to surface that than to hand the model an empty toolbox
-        // and let it invent an answer. Checked against what is BOUND, so
-        // the failure still means "nothing here can run this" rather than
-        // "nothing was shown".
-        let runnable = names.filter { definitions[$0] != nil }
-        guard !runnable.isEmpty else { throw AgentError.noExecutableTools(names) }
+        // and let it invent an answer.
+        guard !tools.isEmpty else { throw AgentError.noExecutableTools(names) }
 
-        let session = beginTurn(query, showing: runnable)
+        let runnable = names.filter { BankToolRegistry.tool(named: $0, client: client) != nil }
+        let session = makeSession(for: runnable, tools: tools)
         let answer = try await respond(in: session, to: query, onUpdate: onUpdate)
-
-        // FAIL CLOSED. Every figure shown must trace to a tool result or to
-        // the user's own question; anything else is a generation defect, and
-        // in a banking app a wrong number is worse than no number.
-        //
-        // One retry, because the failure mode is a sampling artifact at
-        // temperature 0.3 rather than a reasoning error — the tools have
-        // already run and their output is in the session, so a second pass
-        // is cheap and usually clean. If it fails again we throw, and
-        // HybridRouter degrades to the routed plan with no answer, which
-        // the UI already handles.
-        let sources = AnswerVerifier.toolOutputs(in: session.transcript) + [query]
-        do {
-            try AnswerVerifier.verify(answer.text, allowedFrom: sources)
-            return answer
-        } catch let first as AnswerVerifier.UnverifiedFigures {
-            // The user has already watched the rejected draft appear. Say
-            // so before the replacement starts overwriting it — text that
-            // silently rewrites itself reads as a glitch, and "we checked
-            // the figures and they were wrong" is the more reassuring
-            // truth in a banking app.
-            onUpdate(.answerRewriting)
-            // Take the tools away before asking again. MEASURED: a retry
-            // on a three-call turn re-ran all three tools and produced six
-            // identical calls, because "use the figures already in this
-            // conversation" is a request the model is free to decline
-            // while the tools are still in front of it. With no tool
-            // visible it cannot decline: the transcript's existing output
-            // is the only material there is. Saves the round trips and
-            // shrinks the retry's prompt to the text alone.
-            withdrawTools(from: session)
-            var retry = try await respond(
-                in: session,
-                to: Self.retryPrompt(for: query),
-                onUpdate: onUpdate
-            )
-            retry.retriedForUnverifiedFigures = true
-            retry.rejectedFigures = first.stray
-            retry.rejectedDraft = first.answer
-            let retrySources = AnswerVerifier.toolOutputs(in: session.transcript) + [query]
-            do {
-                try AnswerVerifier.verify(retry.text, allowedFrom: retrySources)
-                return retry
-            } catch let second as AnswerVerifier.UnverifiedFigures {
-                throw AgentError.unverifiedFigures(second)
-            } catch {
-                throw AgentError.unverifiedFigures(first)
-            }
-        }
+        remember(session.transcript)
+        return answer
     }
 
     /// One generation, delivered as it is produced.
@@ -312,11 +306,8 @@ final class ToolExecutionAgent {
     /// two-sentence answer. Awaiting the whole thing hides the answer
     /// until after the part that was already fast.
     ///
-    /// The verification contract is unchanged. Partials are for the eye
-    /// only — nothing acts on them, and the caller still verifies the
-    /// FINAL text against the tool outputs before anyone treats it as an
-    /// answer. A draft that fails is retracted, which is exactly why
-    /// `.answerRewriting` exists.
+    /// Partials are for the eye only — nothing acts on them, and the
+    /// caller works from the FINAL text.
     private func respond(
         in session: LanguageModelSession,
         to query: String,
@@ -368,16 +359,6 @@ final class ToolExecutionAgent {
         )
     }
 
-    /// Re-asks in the same session, so the tool results already in the
-    /// transcript are reused rather than the tools being called again.
-    private static func retryPrompt(for query: String) -> String {
-        """
-        That reply contained a number the tools did not return. Answer again \
-        using only the exact figures already in this conversation, copying \
-        each one character for character. The question was: \(query)
-        """
-    }
-
     // MARK: Instructions
 
     /// O(plan), not O(catalog): the tools describe themselves through
@@ -415,36 +396,19 @@ final class ToolExecutionAgent {
         separate account_balance calls where one with "all" returns the \
         same three figures, tripling the wait before a word appears.
 
-        Never work out a total, a difference, a percentage, or whether one \
-        amount covers another yourself. Call `compute` with the exact \
-        figures the tools returned and use the number it gives back. It is \
-        always available and is not part of the list above.
+        Never work out a total, a difference, or a percentage, and never \
+        report a figure you arrived at yourself — only figures a tool \
+        returned. If the question compares two amounts, whether one \
+        covers another, give BOTH figures and say which is larger rather \
+        than reporting what is left over. A number you calculated is \
+        indistinguishable to the reader from one the bank returned, and \
+        this is someone's money.
 
         Answer in one or two short sentences, in plain language, using the \
         exact figures the tools return. If a tool comes back empty, say so \
         plainly rather than filling the gap.
         """
     }
-
-    /// Instructions for the retry, which runs with every tool withdrawn.
-    ///
-    /// Says nothing about calling anything, because nothing is callable —
-    /// the previous instructions' first paragraph would be an invitation
-    /// to attempt it and get an error. The whole job here is transcription.
-    private static let copyOnlyInstructions = """
-        You are a banking assistant. The conversation above already \
-        contains everything you need: the question, and the exact values \
-        the tools returned for it.
-
-        You have no tools. Write the answer using ONLY figures that appear \
-        verbatim above, copied character for character — every digit, \
-        comma, decimal and currency symbol identical. Do not calculate, \
-        round, combine or reformat any of them, and do not introduce a \
-        figure that is not already there.
-
-        One or two short sentences, plain language, no mention of tools or \
-        of this correction.
-        """
 
     // MARK: Transcript
 

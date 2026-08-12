@@ -128,15 +128,6 @@ extension RoutingTrace {
         /// `boundTools`: a skipped tool or an extra call lives here.
         let invocations: [Invocation]
         let answer: String?
-        /// The verifier rejected the first draft (a figure with no source
-        /// in any tool output) and the agent answered again.
-        let retriedForUnverifiedFigures: Bool
-        /// Which figures had no source, and what the rejected draft said.
-        /// The retry doubles a turn's generation cost, so bringing the
-        /// rate down is worth real effort — and that starts with being
-        /// able to read what the model actually got wrong.
-        let rejectedFigures: [String]
-        let rejectedDraft: String?
         /// Why no answer came back, when one didn't.
         let failure: String?
         /// Time from the agent's generation starting to its first

@@ -324,22 +324,18 @@ private struct ExecutionStageView: View {
             // has not fetched — and everything after is generation. When
             // this stage is slow, which half it was in decides whether to
             // look at the API client or at the plan's size.
-            //
-            // ONLY when one generation ran. `timeToFirstToken` belongs to
-            // the generation that produced the answer, so after a retry it
-            // is the SECOND one's, while `duration` still covers both —
-            // subtracting them would file the whole rejected draft under
-            // "writing" and quietly understate what the retry cost.
-            if let first = stage.timeToFirstToken, !stage.retriedForUnverifiedFigures {
+            if let first = stage.timeToFirstToken {
                 HStack(spacing: 10) {
                     TimingChip(title: "Tools, then first token", value: first.traceLabel)
                     TimingChip(title: "Writing", value: (stage.duration - first).traceLabel)
-                }
-            } else if stage.retriedForUnverifiedFigures {
-                HStack(spacing: 10) {
-                    TimingChip(title: "Generations", value: "2")
-                    if let first = stage.timeToFirstToken {
-                        TimingChip(title: "Retry's first token", value: first.traceLabel)
+                    // THE O(plan) CHECK. The agent's session binds exactly
+                    // the routed tools, so this should scale with the plan
+                    // and never with the catalog: a one-tool turn costs
+                    // about the same however many tools the app has. If it
+                    // ever tracks the catalog instead, the routing stages
+                    // are running and buying nothing.
+                    if let prompt = stage.promptTokens {
+                        TimingChip(title: "Prompt", value: "\(prompt) tok")
                     }
                 }
             }
@@ -369,33 +365,6 @@ private struct ExecutionStageView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.orange)
-            }
-
-            if stage.retriedForUnverifiedFigures {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label(
-                        stage.rejectedFigures.isEmpty
-                            ? "The first draft showed a figure no tool returned. It was rejected and the answer written again with the tools withdrawn."
-                            : "Rejected \(stage.rejectedFigures.joined(separator: ", ")) — no tool returned \(stage.rejectedFigures.count == 1 ? "it" : "them"). The answer was written again with the tools withdrawn, so only figures already above could be used.",
-                        systemImage: "checkmark.shield"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-
-                    // The draft itself, because the figure alone rarely
-                    // explains the mistake — a stutter, a rounding, and a
-                    // fabrication all show up as one stray number here and
-                    // need completely different fixes.
-                    if let draft = stage.rejectedDraft {
-                        Text(draft)
-                            .font(.caption.italic())
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                            .textSelection(.enabled)
-                    }
-                }
             }
 
             if let failure = stage.failure {

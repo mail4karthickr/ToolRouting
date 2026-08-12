@@ -15,7 +15,19 @@ is worth.
 
 Same shape as the embedding eval: the dataset is BALANCED by the size of
 the answer, 7 samples each, so the mean cannot be carried by whichever
-case happens to be easy.
+case happens to be easy. Two buckets have since outgrown seven, both on
+2026-08-12 and both for the same underlying change — tools that used to
+accept a name or a place now take an identifier only:
+
+  none (9)     "Find ATMs in Chicago" and "Is there a branch in Chicago?"
+               moved here when the two location tools stopped taking
+               place names. An uncovered ARGUMENT is a genuinely
+               different reason to escalate from an uncovered
+               capability, so they were added rather than swapped in.
+  3 calls (8)  "Is the airport branch open on Saturday?" moved up from
+               1 call when branch_hours started taking a branch ID.
+               Naming the branch no longer skips a step, and a router
+               that thinks it does is exactly what this sample catches.
 
   none     the request needs an action, an uncovered capability, or
            mixes one in — the whole thing goes to the cloud. This bucket
@@ -82,11 +94,15 @@ struct LLMRoutingEvaluation: Evaluation {
             return ModelSubject(value: LLMSelection(
                 tools: try await Self.selectOverShortlist(for: sample.promptDescription)
             ))
-        } catch is LanguageModelSession.GenerationError {
-            // Mirror production (ToolRoutingViewModel): a routing failure —
-            // e.g. a guardrail refusal — degrades to the cloud model, not
-            // a dead end. The eval grades the routing SYSTEM (model +
-            // fallback policy), not the raw model.
+        } catch where LLMRouter.isDecliningToRoute(error) {
+            // Mirror production: a guardrail trip or refusal degrades to
+            // the cloud, so it is graded as the `none` the user would see.
+            // The eval grades the routing SYSTEM (model + fallback
+            // policy), not the raw model.
+            //
+            // Only those two. A context overflow or a timeout is a broken
+            // run, not an abstention, and scoring it as `none` would hand
+            // the router credit for failing.
             return ModelSubject(value: LLMSelection(tools: ["none"]))
         }
     }
@@ -132,7 +148,7 @@ struct LLMRoutingEvaluation: Evaluation {
     // lookup does not, and a single flag cannot say that. Those samples
     // therefore under-test ordering by design.
     var dataset = ArrayLoader(samples: [
-        // MARK: none (7) — the cloud class
+        // MARK: none (9) — the cloud class
         //
         // Each of the first five shares its noun with a real tool, so a
         // router matching on topic alone gets every one of them wrong.
@@ -148,26 +164,44 @@ struct LLMRoutingEvaluation: Evaluation {
         // All-or-nothing policy: half the request is serviceable, the
         // whole thing still goes to the cloud with full context.
         ModelSample(prompt: "Show my balance and transfer $200 to savings", expected: LLMSelection(tools: ["none"])),
+        // Uncovered ARGUMENT rather than an uncovered capability, and the
+        // only kind of sample like that: ATMs and branches are both
+        // covered, but find_nearest_atm and find_nearest_branch take
+        // coordinates and get_location only ever yields the device's own,
+        // so no chain reaches Chicago. The ATM one was ["find_atm"] until
+        // 2026-08-12; the branch one was ["find_branch"] until the branch
+        // tool took the same treatment. A named place is now `none`
+        // whichever of the two it asks for.
+        ModelSample(prompt: "Find ATMs in Chicago", expected: LLMSelection(tools: ["none"])),
+        ModelSample(prompt: "Is there a branch in Chicago?", expected: LLMSelection(tools: ["none"])),
 
         // MARK: 1 call (7)
         //
-        // Four are the lookup half of a verb pair above. Three are
-        // chain-skip controls: the user names the place or amount, so
-        // emitting the lookup step is a wrong answer, not a harmless
-        // extra one.
+        // Six are the lookup half of a verb pair above or a plain single
+        // lookup. ONE is a chain-skip control — "Convert $500 to yen",
+        // where the user names the amount, so emitting a lookup step
+        // first is a wrong answer rather than a harmless extra one. The
+        // branch version used to be the second such control; it stopped
+        // being one on 2026-08-12, when branch_hours started taking an ID
+        // and naming the branch stopped saving a step.
 
         ModelSample(prompt: "What's my debit card number?", expected: LLMSelection(tools: ["card_number"])),
         ModelSample(prompt: "What's my daily ATM withdrawal limit?", expected: LLMSelection(tools: ["card_limits"])),
-        ModelSample(prompt: "Any update on the charge I disputed?", expected: LLMSelection(tools: ["dispute_status"])),
+        ModelSample(prompt: "Any update on the charge I disputed?", expected: LLMSelection(tools: ["get_dispute_status"])),
         ModelSample(prompt: "What payments are scheduled to go out next week?", expected: LLMSelection(tools: ["scheduled_payments"])),
-        ModelSample(prompt: "Find ATMs in Chicago", expected: LLMSelection(tools: ["find_atm"])),
-        ModelSample(prompt: "Is the airport branch open on Saturday?", expected: LLMSelection(tools: ["branch_hours"])),
+        // Keeps the bucket at seven. Replaced the branch-in-Chicago
+        // sample, which moved to `none` when find_nearest_branch stopped
+        // taking place names — no location sample can be a chain-skip
+        // control any more, because no location tool accepts a place.
+        ModelSample(prompt: "What's my routing number?", expected: LLMSelection(tools: ["routing_number"])),
+        // Took the airport-branch slot when that sample became a chain.
+        ModelSample(prompt: "How many reward points do I have?", expected: LLMSelection(tools: ["reward_points"])),
         ModelSample(prompt: "Convert $500 to yen", expected: LLMSelection(tools: ["convert_currency"])),
 
         // MARK: 2 calls (7)
 
         // Ordered — the second call needs the first one's result.
-        ModelSample(prompt: "Find the nearest ATM", expected: LLMSelection(tools: ["get_location", "find_atm"])),
+        ModelSample(prompt: "Find the nearest ATM", expected: LLMSelection(tools: ["get_location", "find_nearest_atm"])),
         ModelSample(prompt: "How much is my savings balance in euros?", expected: LLMSelection(tools: ["account_balance", "convert_currency"])),
         // Independent — any order.
         ModelSample(
@@ -195,14 +229,19 @@ struct LLMRoutingEvaluation: Evaluation {
             expected: LLMSelection(tools: ["search_transactions", "account_balance"], orderMatters: false)
         ),
 
-        // MARK: 3 calls (7)
+        // MARK: 3 calls (8)
 
         // Three-step chain: location → branch → its hours.
-        ModelSample(prompt: "How late is the nearest branch open?", expected: LLMSelection(tools: ["get_location", "find_branch", "branch_hours"])),
+        ModelSample(prompt: "How late is the nearest branch open?", expected: LLMSelection(tools: ["get_location", "find_nearest_branch", "branch_hours"])),
+        // The same chain with the branch NAMED, which is the harder half:
+        // the model has to notice that naming the branch does not supply
+        // the ID branch_hours wants, so no step can be skipped. This is
+        // the sample that catches a router treating a name as an ID.
+        ModelSample(prompt: "Is the airport branch open on Saturday?", expected: LLMSelection(tools: ["get_location", "find_nearest_branch", "branch_hours"])),
         // Chain plus an unrelated lookup riding along.
         ModelSample(
             prompt: "Find the nearest ATM and tell me my daily withdrawal limit",
-            expected: LLMSelection(tools: ["get_location", "find_atm", "card_limits"], orderMatters: false)
+            expected: LLMSelection(tools: ["get_location", "find_nearest_atm", "card_limits"], orderMatters: false)
         ),
         // Independent fan-out, three ways.
         ModelSample(

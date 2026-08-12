@@ -20,258 +20,6 @@
   {
     "input": {
       "instructions": "null",
-      "prompt": "Increase my ATM withdrawal limit"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "I want to dispute a charge from Amazon"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "cancel my netflix payment"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Send 200 euros to my friend in Berlin"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "What are your mortgage rates for first-time buyers?"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Show my balance and transfer $200 to savings"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "close my savings account"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "I want to speak to a human about a complaint"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "raise my credit limit to 20k"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "open a new checking account"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "change my mailing address"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Order a replacement debit card"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Show my recent transactions and cancel the Netflix subscription"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Set up a new autopay for my gym membership"
-    },
-    "output": {
-      "value": {
-        "answer": "",
-        "arguments": [],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "none"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
       "prompt": "bal?"
     },
     "output": {
@@ -285,6 +33,70 @@
         "toolOutput": "",
         "tools": [
           "account_balance"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Find the nearest ATM"
+    },
+    "output": {
+      "value": {
+        "answer": "The closest one is the Market Square ATM, 0.1 mi away and open 24 h.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_atm"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "How late is the nearest branch open?"
+    },
+    "output": {
+      "value": {
+        "answer": "The closest is Main St Branch, and it's open until 5 pm on weekdays and 1 pm on Saturday.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194",
+          "BR-4417"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_branch",
+          "branch_hours"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Increase my ATM withdrawal limit"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
         ]
       }
     }
@@ -312,6 +124,70 @@
   {
     "input": {
       "instructions": "null",
+      "prompt": "atm near me"
+    },
+    "output": {
+      "value": {
+        "answer": "The Market Square ATM is closest at 0.1 mi, and it's open 24 h.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_atm"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Find the nearest ATM and tell me my daily withdrawal limit"
+    },
+    "output": {
+      "value": {
+        "answer": "The Market Square ATM is 0.1 mi away and open 24 h, and your daily ATM withdrawal limit is $1,000.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194",
+          "debit"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_atm",
+          "card_limits"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "I want to dispute a charge from Amazon"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
       "prompt": "What's my routing number?"
     },
     "output": {
@@ -325,6 +201,72 @@
         "toolOutput": "",
         "tools": [
           "routing_number"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Where's the closest branch?"
+    },
+    "output": {
+      "value": {
+        "answer": "Main St Branch is the closest at 0.4 mi, open until 5 pm.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_branch"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Find a branch near me, its hours, and the nearest ATM"
+    },
+    "output": {
+      "value": {
+        "answer": "Main St Branch is 0.4 mi away, open until 5 pm on weekdays and 1 pm on Saturday, and the Market Square ATM is 0.1 mi away.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194",
+          "BR-4417",
+          "37.7749, -122.4194"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_branch",
+          "branch_hours",
+          "find_nearest_atm"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "cancel my netflix payment"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
         ]
       }
     }
@@ -352,621 +294,17 @@
   {
     "input": {
       "instructions": "null",
-      "prompt": "whats my debit card number"
-    },
-    "output": {
-      "value": {
-        "answer": "Your debit card number is 4532 7712 0034 9921.",
-        "arguments": [
-          "debit"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "card_number"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "pts balance"
-    },
-    "output": {
-      "value": {
-        "answer": "You have 18,420 reward points.",
-        "arguments": [
-          ""
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "reward_points"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "has my credit score changed"
-    },
-    "output": {
-      "value": {
-        "answer": "Your credit score is 742.",
-        "arguments": [
-          ""
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "credit_score"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Show my recent transactions"
-    },
-    "output": {
-      "value": {
-        "answer": "Recent activity includes $6.45 at Starbucks, $82.19 at Amazon, and $114.62 at Whole Foods Market.",
-        "arguments": [
-          "7"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "list_transactions"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Get my June statement"
-    },
-    "output": {
-      "value": {
-        "answer": "Your June statement for the checking account is ready under Documents.",
-        "arguments": [
-          "June"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "bank_statement"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "What's my monthly service fee?"
-    },
-    "output": {
-      "value": {
-        "answer": "Your monthly service fee is $12.00.",
-        "arguments": [
-          "all"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "fees_and_charges"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "anything still processing on my card"
-    },
-    "output": {
-      "value": {
-        "answer": "Netflix for $15.49 is processing, and PG&E Electricity for $96.40 is scheduled for the 1st.",
-        "arguments": [
-          "all"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "pending_payments"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "When does my rent payment go out?"
-    },
-    "output": {
-      "value": {
-        "answer": "Your rent transfer of $1,850 is scheduled for the 1st.",
-        "arguments": [
-          "rent"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "scheduled_payments"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Any ATMs in Chicago?"
-    },
-    "output": {
-      "value": {
-        "answer": "The closest is the Market Square ATM at 0.1 mi, open 24 h.",
-        "arguments": [
-          "Chicago"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "find_atm"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "What time does the Main St branch close?"
-    },
-    "output": {
-      "value": {
-        "answer": "The Main St branch closes at 5 pm on weekdays and 1 pm on Saturday.",
-        "arguments": [
-          "Main St"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "branch_hours"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "credit limit?"
-    },
-    "output": {
-      "value": {
-        "answer": "Your credit limit is $10,000, with a daily spending limit of $5,000.",
-        "arguments": [
-          "credit"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "card_limits"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Find the nearest ATM"
-    },
-    "output": {
-      "value": {
-        "answer": "The closest one is the Market Square ATM, 0.1 mi away and open 24 h.",
-        "arguments": [
-          "",
-          "current location"
-        ],
-        "executedTools": [],
-        "orderMatters": true,
-        "toolOutput": "",
-        "tools": [
-          "get_location",
-          "find_atm"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "atm near me"
-    },
-    "output": {
-      "value": {
-        "answer": "The Market Square ATM is closest at 0.1 mi, and it's open 24 h.",
-        "arguments": [
-          "",
-          "current location"
-        ],
-        "executedTools": [],
-        "orderMatters": true,
-        "toolOutput": "",
-        "tools": [
-          "get_location",
-          "find_atm"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Where's the closest branch?"
-    },
-    "output": {
-      "value": {
-        "answer": "Main St Branch is the closest at 0.4 mi, open until 5 pm.",
-        "arguments": [
-          "",
-          "current location"
-        ],
-        "executedTools": [],
-        "orderMatters": true,
-        "toolOutput": "",
-        "tools": [
-          "get_location",
-          "find_branch"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
       "prompt": "Find a branch downtown and tell me its hours"
     },
     "output": {
       "value": {
-        "answer": "Main St Branch is 0.4 mi away and is open Mon–Fri 9 am–5 pm, Sat 9 am–1 pm.",
-        "arguments": [
-          "downtown",
-          "Main St"
-        ],
-        "executedTools": [],
-        "orderMatters": true,
-        "toolOutput": "",
-        "tools": [
-          "find_branch",
-          "branch_hours"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Convert my savings balance to euros"
-    },
-    "output": {
-      "value": {
-        "answer": "Your savings balance of $8,120.55 is 7,470.91 EUR at today's rate of 0.92.",
-        "arguments": [
-          "savings",
-          "$8,120.55"
-        ],
-        "executedTools": [],
-        "orderMatters": true,
-        "toolOutput": "",
-        "tools": [
-          "account_balance",
-          "convert_currency"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "What's my credit score and do I have any pending payments?"
-    },
-    "output": {
-      "value": {
-        "answer": "Your credit score is 742, and two payments are processing: Netflix for $15.49 and PG&E Electricity for $96.40.",
-        "arguments": [
-          "",
-          "all"
-        ],
+        "answer": "",
+        "arguments": [],
         "executedTools": [],
         "orderMatters": false,
         "toolOutput": "",
         "tools": [
-          "credit_score",
-          "pending_payments"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Show my balance and this week's transactions"
-    },
-    "output": {
-      "value": {
-        "answer": "Checking is $2,340.12 and savings is $8,120.55, with recent activity including $6.45 at Starbucks and $82.19 at Amazon.",
-        "arguments": [
-          "all",
-          "7"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "account_balance",
-          "list_transactions"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Show my reward points and my credit card limit"
-    },
-    "output": {
-      "value": {
-        "answer": "You have 18,420 reward points, and your credit limit is $10,000.",
-        "arguments": [
-          "",
-          "credit"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "reward_points",
-          "card_limits"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "What fees did I pay and what interest did I earn last month?"
-    },
-    "output": {
-      "value": {
-        "answer": "You paid a $12.00 monthly service fee, and your savings earned $27.14 in interest last month.",
-        "arguments": [
-          "all",
-          "savings"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "fees_and_charges",
-          "interest_earned"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "my savings balance and my credit score please"
-    },
-    "output": {
-      "value": {
-        "answer": "Your savings balance is $8,120.55 and your credit score is 742.",
-        "arguments": [
-          "savings",
-          ""
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "account_balance",
-          "credit_score"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "How much did I spend at Amazon, and what's the status of that dispute?"
-    },
-    "output": {
-      "value": {
-        "answer": "You spent $82.19 at Amazon, and the dispute for that charge is under review with provisional credit issued on Jul 21.",
-        "arguments": [
-          "Amazon",
-          "Amazon"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "search_transactions",
-          "dispute_status"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "What's my checking account number and routing number?"
-    },
-    "output": {
-      "value": {
-        "answer": "Your checking account number is 4471 9082 3341 and your routing number is 011000000.",
-        "arguments": [
-          "checking",
-          "checking"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "account_number",
-          "routing_number"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Do I have enough in checking to cover the rent payment?"
-    },
-    "output": {
-      "value": {
-        "answer": "Checking is $2,340.12 and the rent transfer is $1,850, so yes.",
-        "arguments": [
-          "checking",
-          "rent"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "account_balance",
-          "scheduled_payments"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Show my card limits and my credit card number"
-    },
-    "output": {
-      "value": {
-        "answer": "Your credit limit is $10,000 with a daily spending limit of $5,000, and the card number is 5412 8834 1290 0044.",
-        "arguments": [
-          "credit",
-          "credit"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "card_limits",
-          "card_number"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "List my scheduled and pending payments"
-    },
-    "output": {
-      "value": {
-        "answer": "Scheduled: rent $1,850 on the 1st and gym $45 on the 12th. Pending: Netflix $15.49 and PG&E Electricity $96.40.",
-        "arguments": [
-          "all",
-          "all"
-        ],
-        "executedTools": [],
-        "orderMatters": false,
-        "toolOutput": "",
-        "tools": [
-          "scheduled_payments",
-          "pending_payments"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "How late is the nearest branch open?"
-    },
-    "output": {
-      "value": {
-        "answer": "The closest is Main St Branch, and it's open until 5 pm on weekdays.",
-        "arguments": [
-          "",
-          "current location",
-          "Main St"
-        ],
-        "executedTools": [],
-        "orderMatters": true,
-        "toolOutput": "",
-        "tools": [
-          "get_location",
-          "find_branch",
-          "branch_hours"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Find the nearest ATM and tell me my daily withdrawal limit"
-    },
-    "output": {
-      "value": {
-        "answer": "The Market Square ATM is 0.1 mi away and open 24 h, and your daily ATM withdrawal limit is $1,000.",
-        "arguments": [
-          "",
-          "current location",
-          "debit"
-        ],
-        "executedTools": [],
-        "orderMatters": true,
-        "toolOutput": "",
-        "tools": [
-          "get_location",
-          "find_atm",
-          "card_limits"
-        ]
-      }
-    }
-  },
-  {
-    "input": {
-      "instructions": "null",
-      "prompt": "Find a branch near me, its hours, and the nearest ATM"
-    },
-    "output": {
-      "value": {
-        "answer": "Main St Branch is 0.4 mi away and open until 5 pm, and the Market Square ATM is 0.1 mi away.",
-        "arguments": [
-          "",
-          "current location",
-          "current location"
-        ],
-        "executedTools": [],
-        "orderMatters": true,
-        "toolOutput": "",
-        "tools": [
-          "get_location",
-          "find_branch",
-          "find_atm"
+          "none"
         ]
       }
     }
@@ -998,6 +336,66 @@
   {
     "input": {
       "instructions": "null",
+      "prompt": "Send 200 euros to my friend in Berlin"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "whats my debit card number"
+    },
+    "output": {
+      "value": {
+        "answer": "Your debit card number is 4532 7712 0034 9921.",
+        "arguments": [
+          "debit"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "card_number"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Convert my savings balance to euros"
+    },
+    "output": {
+      "value": {
+        "answer": "Your savings balance of $8,120.55 is 7,470.91 EUR at today's rate of 0.92.",
+        "arguments": [
+          "savings",
+          "$8,120.55"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "account_balance",
+          "convert_currency"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
       "prompt": "Tell me my savings balance, the interest it earned, and that balance in euros"
     },
     "output": {
@@ -1015,6 +413,66 @@
           "account_balance",
           "interest_earned",
           "convert_currency"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What are your mortgage rates for first-time buyers?"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "pts balance"
+    },
+    "output": {
+      "value": {
+        "answer": "You have 18,420 reward points.",
+        "arguments": [
+          ""
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "reward_points"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What's my credit score and do I have any pending payments?"
+    },
+    "output": {
+      "value": {
+        "answer": "Your credit score is 742, and two payments are processing: Netflix for $15.49 and PG&E Electricity for $96.40.",
+        "arguments": [
+          "",
+          "all"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "credit_score",
+          "pending_payments"
         ]
       }
     }
@@ -1046,6 +504,66 @@
   {
     "input": {
       "instructions": "null",
+      "prompt": "Show my balance and transfer $200 to savings"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "has my credit score changed"
+    },
+    "output": {
+      "value": {
+        "answer": "Your credit score is 742.",
+        "arguments": [
+          ""
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "credit_score"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Show my balance and this week's transactions"
+    },
+    "output": {
+      "value": {
+        "answer": "Checking is $2,340.12 and savings is $8,120.55, with recent activity including $6.45 at Starbucks and $82.19 at Amazon.",
+        "arguments": [
+          "all",
+          "7"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "account_balance",
+          "list_transactions"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
       "prompt": "Show my recent transactions, pending payments, and scheduled payments"
     },
     "output": {
@@ -1063,6 +581,66 @@
           "list_transactions",
           "pending_payments",
           "scheduled_payments"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "close my savings account"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Show my recent transactions"
+    },
+    "output": {
+      "value": {
+        "answer": "Recent activity includes $6.45 at Starbucks, $82.19 at Amazon, and $114.62 at Whole Foods Market.",
+        "arguments": [
+          "7"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "list_transactions"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Show my reward points and my credit card limit"
+    },
+    "output": {
+      "value": {
+        "answer": "You have 18,420 reward points, and your credit limit is $10,000.",
+        "arguments": [
+          "",
+          "credit"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "reward_points",
+          "card_limits"
         ]
       }
     }
@@ -1094,15 +672,75 @@
   {
     "input": {
       "instructions": "null",
+      "prompt": "I want to speak to a human about a complaint"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Get my June statement"
+    },
+    "output": {
+      "value": {
+        "answer": "Your June statement for the checking account is ready under Documents.",
+        "arguments": [
+          "June"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "bank_statement"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What fees did I pay and what interest did I earn last month?"
+    },
+    "output": {
+      "value": {
+        "answer": "You paid a $12.00 monthly service fee, and your savings earned $27.14 in interest last month.",
+        "arguments": [
+          "all",
+          "savings"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "fees_and_charges",
+          "interest_earned"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
       "prompt": "What did I spend at Amazon and Starbucks, and what's my card limit?"
     },
     "output": {
       "value": {
-        "answer": "You spent $82.19 at Amazon and $6.45 at Starbucks, and your credit limit is $10,000.",
+        "answer": "You spent $82.19 at Amazon and $6.45 at Starbucks, and your card limits are a $10,000 credit limit, a $5,000 daily spending limit, and a $1,000 daily ATM withdrawal limit.",
         "arguments": [
           "Amazon",
           "Starbucks",
-          "credit"
+          "all"
         ],
         "executedTools": [],
         "orderMatters": false,
@@ -1111,6 +749,66 @@
           "search_transactions",
           "search_transactions",
           "card_limits"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "raise my credit limit to 20k"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What's my monthly service fee?"
+    },
+    "output": {
+      "value": {
+        "answer": "Your monthly service fee is $12.00.",
+        "arguments": [
+          "all"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "fees_and_charges"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "my savings balance and my credit score please"
+    },
+    "output": {
+      "value": {
+        "answer": "Your savings balance is $8,120.55 and your credit score is 742.",
+        "arguments": [
+          "savings",
+          ""
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "account_balance",
+          "credit_score"
         ]
       }
     }
@@ -1142,6 +840,66 @@
   {
     "input": {
       "instructions": "null",
+      "prompt": "open a new checking account"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "anything still processing on my card"
+    },
+    "output": {
+      "value": {
+        "answer": "Netflix for $15.49 is processing, and PG&E Electricity for $96.40 is scheduled for the 1st.",
+        "arguments": [
+          "all"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "pending_payments"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "How much did I spend at Amazon, and what's the status of that dispute?"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $82.19 at Amazon, and the dispute for that charge is under review with provisional credit issued on Jul 21.",
+        "arguments": [
+          "Amazon",
+          "Amazon"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "search_transactions",
+          "get_dispute_status"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
       "prompt": "Get my June statement, my account number, and my routing number"
     },
     "output": {
@@ -1166,6 +924,66 @@
   {
     "input": {
       "instructions": "null",
+      "prompt": "change my mailing address"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "When does my rent payment go out?"
+    },
+    "output": {
+      "value": {
+        "answer": "Your rent transfer of $1,850 is scheduled for the 1st.",
+        "arguments": [
+          "rent"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "scheduled_payments"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What's my checking account number and routing number?"
+    },
+    "output": {
+      "value": {
+        "answer": "Your checking account number is 4471 9082 3341 and your routing number is 011000000.",
+        "arguments": [
+          "checking",
+          "checking"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "account_number",
+          "routing_number"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
       "prompt": "What's the status of my Amazon dispute, how much was the charge, and what's my credit card balance?"
     },
     "output": {
@@ -1180,9 +998,67 @@
         "orderMatters": false,
         "toolOutput": "",
         "tools": [
-          "dispute_status",
+          "get_dispute_status",
           "search_transactions",
           "account_balance"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Order a replacement debit card"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Any ATMs in Chicago?"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Do I have enough in checking to cover the rent payment?"
+    },
+    "output": {
+      "value": {
+        "answer": "Checking is $2,340.12 and the rent transfer is $1,850, so yes.",
+        "arguments": [
+          "checking",
+          "rent"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "account_balance",
+          "scheduled_payments"
         ]
       }
     }
@@ -1214,6 +1090,70 @@
   {
     "input": {
       "instructions": "null",
+      "prompt": "Show my recent transactions and cancel the Netflix subscription"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What time does the Main St branch close?"
+    },
+    "output": {
+      "value": {
+        "answer": "The Main St branch closes at 5 pm on weekdays and 1 pm on Saturday.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194",
+          "BR-4417"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_branch",
+          "branch_hours"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Show my card limits and my credit card number"
+    },
+    "output": {
+      "value": {
+        "answer": "Your credit limit is $10,000 with a daily spending limit of $5,000, and the card number is 5412 8834 1290 0044.",
+        "arguments": [
+          "credit",
+          "credit"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "card_limits",
+          "card_number"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
       "prompt": "What's my credit limit, my credit card number, and my credit score?"
     },
     "output": {
@@ -1238,23 +1178,77 @@
   {
     "input": {
       "instructions": "null",
-      "prompt": "What ATMs are near Chicago, what's my withdrawal limit, and my checking balance?"
+      "prompt": "Set up a new autopay for my gym membership"
     },
     "output": {
       "value": {
-        "answer": "The Market Square ATM is 0.1 mi away, your daily ATM withdrawal limit is $1,000, and checking is $2,340.12.",
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "credit limit?"
+    },
+    "output": {
+      "value": {
+        "answer": "Your credit limit is $10,000, with a daily spending limit of $5,000.",
         "arguments": [
-          "Chicago",
-          "debit",
-          "checking"
+          "credit"
         ],
         "executedTools": [],
         "orderMatters": false,
         "toolOutput": "",
         "tools": [
-          "find_atm",
-          "card_limits",
-          "account_balance"
+          "card_limits"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "List my scheduled and pending payments"
+    },
+    "output": {
+      "value": {
+        "answer": "Scheduled: rent $1,850 on the 1st, credit card autopay for the statement balance on the 5th, and gym $45 on the 12th. Pending: Netflix $15.49 and PG&E Electricity $96.40.",
+        "arguments": [
+          "all",
+          "all"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "scheduled_payments",
+          "pending_payments"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What ATMs are near Chicago, what's my withdrawal limit, and my checking balance?"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
         ]
       }
     }

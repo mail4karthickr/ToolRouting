@@ -51,7 +51,9 @@ enum ToolCatalog {
             argumentHint: "the merchant name, e.g. 'Starbucks'",
             exampleQueries: [
                 "What did I spend at Starbucks?", "Show my Amazon purchases", "Any charges from Netflix?",
-                "spent at starbucks", "starbucks charges", "amazon spend"
+                "spent at starbucks", "starbucks charges", "amazon spend",
+                "how much did i spend at", "what did i spend at a shop", "spending at a merchant",
+                "charges from a store", "how much have i spent there", "purchases from a company"
             ],
             icon: "magnifyingglass",
             color: .gray
@@ -63,7 +65,8 @@ enum ToolCatalog {
             notFor: "the account number itself (use account_number) or card numbers (use card_number)",
             argumentHint: "which account: checking or savings",
             exampleQueries: [
-                "What's my routing number?", "I need the routing number for a wire transfer", "Routing number for my checking account",
+                "What's my routing number?", "I need the routing number for a wire transfer",
+                "Routing number for my checking account", "Routing number for my savings account",
                 "routing no", "whats my routing no"
             ],
             icon: "number.circle",
@@ -87,7 +90,7 @@ enum ToolCatalog {
             category: .cards,
             description: "Show the number of the user's debit or credit card.",
             notFor: "blocking, freezing, or replacing a card (actions)",
-            argumentHint: "which card: debit or credit",
+            argumentHint: "which card: debit, credit, or all when the question names none",
             exampleQueries: [
                 "What's my debit card number?", "Show my credit card number", "I need my card number",
                 "card no", "debit card no"
@@ -124,8 +127,8 @@ enum ToolCatalog {
         ToolDefinition(
             displayName: "get_location",
             category: .locations,
-            description: "Get the user's current location. Call this FIRST when the user says 'near me' or 'nearest' without naming a place, then pass its result to find_branch or find_atm.",
-            notFor: "requests that already name a place, city, or zip code — pass those directly to find_branch or find_atm",
+            description: "Get the user's current location, as a place name plus latitude and longitude. Call this FIRST for anything about a nearby branch or ATM. It is the ONLY source of coordinates, so neither find_nearest_branch nor find_nearest_atm can run without it.",
+            notFor: "requests that name a place, city, or zip code — no tool takes a place name, so those are `none`",
             argumentHint: "no parameters",
             exampleQueries: [
                 "(step 1 of) Find an ATM near me", "(step 1 of) Where's the closest branch?",
@@ -135,27 +138,40 @@ enum ToolCatalog {
             color: .pink
         ),
         ToolDefinition(
-            displayName: "find_branch",
+            displayName: "find_nearest_branch",
             category: .locations,
-            description: "Find bank branches at a given location.",
-            notFor: "ATMs (use find_atm) or booking an appointment (action)",
-            argumentHint: "the place: a city, zip code, or 'current location' when it comes from get_location",
+            // Same two-example split as find_nearest_atm below: the first
+            // two are what the selection prompt shows, so the model READS
+            // the dependency, and the rest feed the embedding index so
+            // retrieval still matches the plain phrasings.
+            description: "Find the bank branches closest to a pair of coordinates, each with its branch ID. Takes latitude and longitude from get_location, so get_location has to run first. Its IDs are what branch_hours needs.",
+            notFor: "branches at a named city, zip code, or address — this tool takes coordinates and nothing else, so such a request is `none`; also not ATMs (use find_nearest_atm) or booking an appointment (action)",
+            argumentHint: "latitude and longitude, both numbers, as returned by get_location",
             exampleQueries: [
-                "Is there a branch in downtown?", "Nearest branch to 94103", "Find a branch near me",
-                "nearest branch", "branch near me"
+                "(step 2 of, after get_location) Find a branch near me",
+                "(step 2 of, after get_location) nearest branch",
+                "nearest branch", "branch near me", "Where's the closest branch?"
             ],
             icon: "mappin.and.ellipse",
             color: .red
         ),
         ToolDefinition(
-            displayName: "find_atm",
+            displayName: "find_nearest_atm",
             category: .locations,
-            description: "Find ATMs at a given location.",
-            notFor: "branches with tellers (use find_branch) or changing withdrawal limits (action)",
-            argumentHint: "the place: a city, zip code, or 'current location' when it comes from get_location",
+            // The first two examples are the two the selection prompt
+            // shows (LLMRouter.entry caps at two); the rest exist for the
+            // embedding index, which scores every example. So the model
+            // READS the dependency and retrieval still matches the plain
+            // phrasings. The old entry led with "Find the nearest ATM" as
+            // a query this tool served alone, which is exactly what the
+            // model believed on eval sample 7.
+            description: "Find the ATMs closest to a pair of coordinates. Takes latitude and longitude from get_location, so get_location has to run first.",
+            notFor: "ATMs at a named city, zip code, or address — this tool takes coordinates and nothing else, so such a request is `none`; also not branches with tellers (use find_nearest_branch) or changing withdrawal limits (action)",
+            argumentHint: "latitude and longitude, both numbers, as returned by get_location",
             exampleQueries: [
-                "Find the nearest ATM", "Any ATMs in the airport?", "ATMs near 94103",
-                "nearest atm", "atm near me", "closest atm"
+                "(step 2 of, after get_location) Find the nearest ATM",
+                "(step 2 of, after get_location) atm near me",
+                "nearest atm", "closest atm", "atm near me", "Find the nearest ATM"
             ],
             icon: "dollarsign.square",
             color: .yellow
@@ -167,7 +183,8 @@ enum ToolCatalog {
             notFor: "waiving or disputing a fee (actions)",
             argumentHint: "which fee or account, e.g. 'monthly service fee', 'all charges on checking'",
             exampleQueries: [
-                "What's my monthly service fee?", "What charges are on my account?", "Why am I being charged a service fee?",
+                "What's my monthly service fee?", "What charges are on my account?",
+                "What fees are on my checking account?", "Why am I being charged a service fee?",
                 "any fees", "fees on my acct"
             ],
             icon: "dollarsign.circle",
@@ -179,8 +196,23 @@ enum ToolCatalog {
             description: "Show the current balance of the user's accounts (checking, savings, credit card).",
             notFor: "a reward points balance (use reward_points), past transactions (use list_transactions), or payments still processing (use pending_payments)",
             argumentHint: "which account: checking, savings, credit card, or all",
+            // One example per ACCOUNT TYPE this tool accepts, not one per
+            // phrasing. The description names all three types, but that is
+            // a single vector blended across them — ToolIndex scores each
+            // example separately and takes the best match, so a type with
+            // no example of its own has to win on the blended one. Credit
+            // card and checking had none, and "what's my credit card
+            // balance?" lost the slot to card_limits, whose first example
+            // is "What's my credit limit?" — one word away (eval
+            // 2026-08-12, sample 14, wrong on four runs out of four).
+            //
+            // The credit-card example sits SECOND on purpose: only the
+            // first two reach the LLM prompt, so it also tells Stage 2
+            // that card balances belong here rather than on card_limits.
             exampleQueries: [
-                "What is my balance?", "How much do I have in savings?", "Show all my account balances",
+                "What is my balance?", "What's my credit card balance?",
+                "How much do I have in savings?", "How much is in my checking account?",
+                "Show all my account balances",
                 "bal?", "whats my bal", "how much money do i have"
             ],
             icon: "banknote",
@@ -230,8 +262,13 @@ enum ToolCatalog {
             displayName: "card_limits",
             category: .cards,
             description: "Show the limits of the user's card: credit limit, daily ATM withdrawal limit, and spending limit.",
-            notFor: "the card number (use card_number), the credit score (use credit_score), or raising a limit (action)",
-            argumentHint: "which card: debit or credit",
+            // "the balance owed" belongs in notFor and NOWHERE ELSE in this
+            // entry: notFor reaches the LLM prompt but is deliberately kept
+            // out of the embedding index, so it can repel balance queries
+            // at selection without attracting them at retrieval. Putting
+            // the word "balance" in the description would do the opposite.
+            notFor: "the balance owed on the card (use account_balance), the card number (use card_number), the credit score (use credit_score), or raising a limit (action)",
+            argumentHint: "which card: debit, credit, or all when the question names none",
             exampleQueries: [
                 "What's my credit limit?", "What's my daily ATM withdrawal limit?", "How much can I spend on my debit card?",
                 "atm limit", "daily limit"
@@ -254,9 +291,9 @@ enum ToolCatalog {
             color: .yellow
         ),
         ToolDefinition(
-            displayName: "dispute_status",
+            displayName: "get_dispute_status",
             category: .transactions,
-            description: "Show the status of transaction disputes the user has already raised.",
+            description: "Show the status of transaction disputes the user has ALREADY raised. Read-only: it cannot open, file, raise or escalate a dispute.",
             notFor: "raising a NEW dispute or reporting fraud (actions)",
             argumentHint: "the merchant of the disputed charge, or 'all'",
             exampleQueries: [
@@ -270,12 +307,13 @@ enum ToolCatalog {
         ToolDefinition(
             displayName: "branch_hours",
             category: .locations,
-            description: "Show the opening hours of a branch the user names, e.g. 'the Main St branch' or 'the airport branch'.",
-            notFor: "finding which branches exist — when the user names the branch, call this tool DIRECTLY with that name; only chain get_location and find_branch first when no branch is named",
-            argumentHint: "the branch name, e.g. 'Main St', or 'from find_branch' when it comes from an earlier step",
+            description: "Show the opening hours of one branch, identified by its branch ID (e.g. 'BR-4417'). The ID comes from find_nearest_branch, which must run first — this tool does NOT accept a branch name.",
+            notFor: "finding which branches exist (use find_nearest_branch); and never call this with a branch NAME the user said, because a name is not an ID — even 'the Main St branch' needs get_location and find_nearest_branch ahead of it to turn that name into an ID",
+            argumentHint: "the branch ID from find_nearest_branch, e.g. 'BR-4417'",
             exampleQueries: [
-                "What time does the Main St branch close?", "Is the airport branch open on Saturday?", "Branch opening hours",
-                "branch timings", "main st branch hours"
+                "(step 3 of, after find_nearest_branch) What time does the Main St branch close?",
+                "(step 3 of, after find_nearest_branch) Is the airport branch open on Saturday?",
+                "Branch opening hours", "branch timings", "main st branch hours"
             ],
             icon: "clock",
             color: .brown

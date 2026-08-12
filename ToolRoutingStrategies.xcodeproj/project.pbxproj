@@ -43,6 +43,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Models/BankingAnswer.swift,
+				Models/DeviceLocation.swift,
 				Models/ToolCatalog.swift,
 				Models/ToolDefinition.swift,
 				Models/Transaction.swift,

@@ -23,8 +23,18 @@ struct MockBankAPIClient: BankAPIClient {
         accountType.localizedCaseInsensitiveContains("sav") ? "4471 9082 7789" : "4471 9082 3341"
     }
 
+    /// Same `all` case as `cardLimits`, for the same reason: this was a
+    /// ternary where every non-"credit" value meant debit, so a request for
+    /// every card number returned one card's.
     func cardNumber(cardType: String) async throws -> String {
-        cardType.localizedCaseInsensitiveContains("credit") ? "5412 8834 1290 0044" : "4532 7712 0034 9921"
+        switch cardType.lowercased() {
+        case let type where type.contains("credit"):
+            return "5412 8834 1290 0044"
+        case let type where type.contains("debit"):
+            return "4532 7712 0034 9921"
+        default:
+            return "Debit: 4532 7712 0034 9921 · Credit: 5412 8834 1290 0044"
+        }
     }
 
     func bankStatement(month: String, accountType: String) async throws -> String {
@@ -35,11 +45,14 @@ struct MockBankAPIClient: BankAPIClient {
         742
     }
 
-    func currentLocation() async throws -> String {
-        "Market Square, San Francisco, CA 94103"
+    func currentLocation() async throws -> DeviceLocation {
+        DeviceLocation(
+            latitude: 37.7749,
+            longitude: -122.4194
+        )
     }
 
-    func findATMs(near location: String) async throws -> [String] {
+    func findNearestATMs(latitude: Double, longitude: Double) async throws -> [String] {
         [
             "Market Square ATM — 0.1 mi, 24 h",
             "Main St Branch ATM — 0.4 mi, 24 h",
@@ -47,12 +60,8 @@ struct MockBankAPIClient: BankAPIClient {
         ]
     }
 
-    func findBranches(near location: String) async throws -> [String] {
-        [
-            "Main St Branch — 0.4 mi, open until 5 pm",
-            "Market Square Branch — 1.2 mi, open until 6 pm",
-            "Airport Branch — 5.6 mi, open until 8 pm"
-        ]
+    func findNearestBranches(latitude: Double, longitude: Double) async throws -> [String] {
+        Self.branches.map { "\($0.id) · \($0.name) — \($0.detail)" }
     }
 
     func feesAndCharges(accountType: String) async throws -> [String] {
@@ -106,22 +115,93 @@ struct MockBankAPIClient: BankAPIClient {
         ]
     }
 
+    /// AN EXPLICIT `all`, like `accountBalance` above and unlike the ternary
+    /// this replaced.
+    ///
+    /// That ternary was `contains("credit") ? credit : debit`, so every
+    /// value that was not the word "credit" — including "all" — silently
+    /// meant DEBIT. The agent asking for every limit got the debit pair
+    /// back and answered "$1,000 and $3,000" to a customer holding a
+    /// $10,000 credit limit. No error, no invented figure, just the
+    /// requested number missing. See `CardType.all`.
     func cardLimits(cardType: String) async throws -> String {
-        cardType.localizedCaseInsensitiveContains("credit")
-            ? "Credit limit: $10,000 · Daily spending limit: $5,000"
-            : "Daily ATM withdrawal limit: $1,000 · Daily spending limit: $3,000"
+        switch cardType.lowercased() {
+        case let type where type.contains("credit"):
+            return "Credit limit: $10,000 · Daily spending limit: $5,000"
+        case let type where type.contains("debit"):
+            return "Daily ATM withdrawal limit: $1,000 · Daily spending limit: $3,000"
+        default:
+            return "Credit limit: $10,000 · Daily spending limit: $5,000 · Daily ATM withdrawal limit: $1,000"
+        }
     }
 
     func rewardPoints() async throws -> Int {
         18_420
     }
 
+    /// Disputes that actually exist, keyed by merchant.
+    ///
+    /// One entry, deliberately: a customer with a dispute on every
+    /// merchant they have ever paid is not a customer, and the point of
+    /// this fixture is that MOST lookups come back empty.
+    private static let openDisputes = [
+        "amazon": "Dispute for the Amazon charge is under review; provisional credit issued on Jul 21."
+    ]
+
+    /// STILL DETERMINISTIC, NOW CONDITIONAL — and the distinction matters.
+    ///
+    /// This used to answer "under review; provisional credit issued" for
+    /// ANY merchant, so asking about a shop the user had never disputed
+    /// invented a dispute for them. In an app about someone's money that
+    /// is the worst kind of mock: it makes a wrong tool call look like a
+    /// complete, plausible answer, which is exactly what happened to eval
+    /// sample 9 — a request to OPEN a dispute was answered with a
+    /// confident status for one that was never raised.
+    ///
+    /// The fix is not randomness. Varying the reply per call would break
+    /// the evals outright: HybridRouterTests compares every figure against
+    /// MockGroundTruth (which calls this same method), and
+    /// HybridRouterReliabilityTests exists to measure whether a run is
+    /// reproducible at all. Moving data would make a score change
+    /// meaningless. What was missing is that the answer should depend on
+    /// the ARGUMENT — same input, same output; different input, different
+    /// output.
     func disputeStatus(merchant: String) async throws -> String {
-        "Dispute for the \(merchant) charge is under review; provisional credit issued on Jul 21."
+        let wanted = merchant.trimmingCharacters(in: .whitespaces).lowercased()
+
+        if wanted.isEmpty || wanted == "all" {
+            let every = Self.openDisputes.values.sorted()
+            return every.isEmpty ? "No disputes on record." : every.joined(separator: "\n")
+        }
+        guard let dispute = Self.openDisputes.first(where: { wanted.contains($0.key) })?.value else {
+            return "No dispute on record for \(merchant)."
+        }
+        return dispute
     }
 
-    func branchHours(branch: String) async throws -> String {
-        "\(branch) branch: Mon–Fri 9 am–5 pm, Sat 9 am–1 pm, closed Sunday."
+    /// The branches this customer has near them, nearest first.
+    ///
+    /// The IDs are the point. `branchHours` takes one, and
+    /// `findNearestBranches` is the only call that hands them out, so the
+    /// chain holds for the same reason the coordinate pair holds it for
+    /// the finders: a branch NAME is something a model can produce from
+    /// the question alone, an ID is not.
+    private static let branches: [(id: String, name: String, detail: String)] = [
+        ("BR-4417", "Main St Branch", "0.4 mi, open until 5 pm"),
+        ("BR-2290", "Market Square Branch", "1.2 mi, open until 6 pm"),
+        ("BR-8801", "Airport Branch", "5.6 mi, open until 8 pm")
+    ]
+
+    /// Conditional on the ARGUMENT, like `disputeStatus` above and for the
+    /// same reason: answering with plausible hours for an ID the bank
+    /// never issued is how a skipped `find_nearest_branch` turns into a
+    /// confident wrong answer instead of a visible failure.
+    func branchHours(branchID: String) async throws -> String {
+        let wanted = branchID.trimmingCharacters(in: .whitespaces).uppercased()
+        guard let branch = Self.branches.first(where: { $0.id.uppercased() == wanted }) else {
+            return "No branch has ID '\(branchID)'. Call find_nearest_branch first to get one."
+        }
+        return "\(branch.name) (\(branch.id)): Mon–Fri 9 am–5 pm, Sat 9 am–1 pm, closed Sunday."
     }
 
     func interestEarned(accountType: String) async throws -> String {

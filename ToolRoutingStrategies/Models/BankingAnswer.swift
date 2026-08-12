@@ -49,9 +49,14 @@ struct BankingAnswer: Codable, Sendable {
     /// the router extracts its own arguments at run time.
     var arguments: [String] = []
 
-    /// The router's own explanation, carried through so a failure in the
-    /// report says what went wrong rather than just showing a blank
-    /// answer. Subject side only.
+    /// The router's own explanation — the model's `reasoning` sentence,
+    /// and the policy note when one fired. Subject side only.
+    ///
+    /// ENCODED but not required when decoding, which is the whole point:
+    /// datasets never carry it, and every eval report does. Without it a
+    /// failed sample shows the wrong tools and no account of why they
+    /// were chosen, and diagnosing one means reproducing it by hand in
+    /// the app to read the same sentence off the trace sheet.
     var note: String = ""
 
     /// Tools the agent actually invoked. Recorded for diagnosis; where it
@@ -62,8 +67,7 @@ struct BankingAnswer: Codable, Sendable {
     /// the property's default. Swift's synthesized decoder throws
     /// instead, which turns one added property into a dataset that
     /// silently loads zero samples — the eval then reports -1 for every
-    /// metric rather than an error. `note` is runtime-only and never
-    /// round-trips.
+    /// metric rather than an error.
     init(
         tools: [String] = [],
         orderMatters: Bool = true,
@@ -83,7 +87,7 @@ struct BankingAnswer: Codable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case tools, orderMatters, answer, toolOutput, arguments, executedTools
+        case tools, orderMatters, answer, toolOutput, arguments, executedTools, note
     }
 
     init(from decoder: any Decoder) throws {
@@ -94,5 +98,6 @@ struct BankingAnswer: Codable, Sendable {
         toolOutput = try c.decodeIfPresent(String.self, forKey: .toolOutput) ?? ""
         arguments = try c.decodeIfPresent([String].self, forKey: .arguments) ?? []
         executedTools = try c.decodeIfPresent([String].self, forKey: .executedTools) ?? []
+        note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
     }
 }

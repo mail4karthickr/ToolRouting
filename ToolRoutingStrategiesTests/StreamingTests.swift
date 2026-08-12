@@ -57,7 +57,6 @@ struct StreamingTests {
             case .retrieving: recording.stages.append("retrieving")
             case .selecting: recording.stages.append("selecting")
             case .answering: recording.stages.append("answering")
-            case .answerRewriting: recording.stages.append("rewriting")
             case .answerPartial(let text):
                 if recording.timeToFirstToken == nil {
                     recording.timeToFirstToken = clock.now - start
@@ -150,6 +149,19 @@ answer:
     unrelated questions on one agent and checking each ran its own tools.
 */
 
+/// The raw text every tool returned in `transcript`. Read from the
+/// transcript rather than re-running the API, so the assertions below see
+/// exactly what the model saw.
+private func toolOutputs(in transcript: Transcript) -> [String] {
+    transcript.flatMap { entry -> [String] in
+        guard case .toolOutput(let output) = entry else { return [] }
+        return output.segments.compactMap { segment in
+            guard case .text(let text) = segment else { return nil }
+            return text.content
+        }
+    }
+}
+
 @Suite("Session reuse")
 @MainActor
 struct SessionReuseTests {
@@ -171,16 +183,86 @@ struct SessionReuseTests {
         #expect(router.sessionsBuilt == 1)
     }
 
-    @Test("The agent builds one session, however many turns it answers")
-    func agentKeepsOneSession() async throws {
+    @Test("The agent builds a session per turn, bound to that turn's plan")
+    func agentBindsEachTurnToItsPlan() async throws {
         let agent = ToolExecutionAgent()
         agent.prewarm()
-        #expect(agent.sessionsBuilt == 1)
 
-        _ = try await agent.answer("What's my checking balance?", using: [.accountBalance(account: .checking)])
-        _ = try await agent.answer("How many reward points do I have?", using: [.rewardPoints])
+        // Prewarm builds nothing reusable — it pages the model in, which
+        // is process-wide. There is nothing turn-specific to warm, because
+        // the tools are the plan's and the plan does not exist yet.
+        #expect(agent.sessionsBuilt == 0)
 
-        #expect(agent.sessionsBuilt == 1)
+        let balance = try await agent.answer("What's my checking balance?", using: [.accountBalance(account: .checking)])
+        let points = try await agent.answer("How many reward points do I have?", using: [.rewardPoints])
+
+        // One per turn, deliberately. A session's tools are fixed at init
+        // and the plan changes per request, so reuse and correct binding
+        // cannot both hold — and binding wins. See makeSession.
+        #expect(agent.sessionsBuilt == 2)
+
+        // The actual guarantee: each turn ran ONLY what its plan named.
+        //
+        // The `|| $0 == "compute"` escape hatch these two carried until
+        // 2026-08-12 is gone with the unconditional binding. It was the
+        // one thing a turn could run that its plan never named, and this
+        // assertion is the place that would have caught it becoming a
+        // problem — it could not, because it was written to allow it.
+        #expect(balance.executedTools.allSatisfy { $0 == "account_balance" })
+        #expect(points.executedTools.allSatisfy { $0 == "reward_points" })
+    }
+
+    @Test("A follow-up carries the conversation but not the earlier turn's tools")
+    func historyCarriesWithoutTheToolbox() async throws {
+        let agent = ToolExecutionAgent()
+
+        _ = try await agent.answer(
+            "What's my checking balance?",
+            using: [.accountBalance(account: .checking)]
+        )
+        let followUp = try await agent.answer(
+            "and how many reward points do i have",
+            using: [.rewardPoints]
+        )
+
+        // The conversation IS carried: the second turn's transcript holds
+        // the first turn's question, which is what makes "what about last
+        // month?" answerable at all.
+        let questionsInContext = followUp.transcript.compactMap { entry -> String? in
+            guard case .prompt(let prompt) = entry else { return nil }
+            return prompt.segments
+                .compactMap { if case .text(let text) = $0 { text.content } else { nil } }
+                .joined(separator: " ")
+        }
+        #expect(questionsInContext.contains { $0.contains("checking balance") })
+
+        // The TOOLBOX is not. account_balance was routed for the previous
+        // question and is not routed for this one, so it is not bound and
+        // cannot run — tools do not accumulate down a conversation the way
+        // context does.
+        #expect(!followUp.executedTools.contains("account_balance"))
+
+        // And no figure from the earlier turn's tools is in scope: only
+        // prompts and responses are carried, never tool output.
+        #expect(toolOutputs(in: followUp.transcript).allSatisfy { !$0.contains("2,340.12") })
+    }
+
+    @Test("A tool outside the plan cannot be called")
+    func unroutedToolsAreUnreachable() async throws {
+        let agent = ToolExecutionAgent()
+
+        // A plan of one tool, against a query that invites another: the
+        // model would like a merchant search, and search_transactions is
+        // not bound, so it cannot have one.
+        //
+        // This is the regression guard for eval sample 6, where a turn
+        // that planned `pending_payments` dispatched `search_transactions`
+        // because all twenty tools were bound to a shared session.
+        let answer = try await agent.answer(
+            "how much did i spend at uber",
+            using: [.pendingPayments(account: .all)]
+        )
+        #expect(!answer.executedTools.contains("search_transactions"))
     }
 
     // MARK: The mechanism
@@ -225,10 +307,9 @@ struct SessionReuseTests {
         #expect(points.executedTools.contains("reward_points"))
 
         // And the second turn is not still holding the first. Each turn
-        // resets the transcript, which is what keeps AnswerVerifier's
-        // guarantee — every figure traces to a tool call made for THIS
-        // question — true on a session that outlives the question.
+        // resets the transcript, so every figure in front of the model
+        // came from a tool call made for THIS question.
         #expect(!points.executedTools.contains("account_balance"))
-        #expect(AnswerVerifier.toolOutputs(in: points.transcript).allSatisfy { !$0.contains("Checking") })
+        #expect(toolOutputs(in: points.transcript).allSatisfy { !$0.contains("Checking") })
     }
 }

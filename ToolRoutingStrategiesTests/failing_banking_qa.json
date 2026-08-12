@@ -1,0 +1,448 @@
+[
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "How late is the nearest branch open?"
+    },
+    "output": {
+      "value": {
+        "answer": "The closest is Main St Branch, and it's open until 5 pm on weekdays and 1 pm on Saturday.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194",
+          "BR-4417"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_branch",
+          "branch_hours"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Find the nearest ATM and tell me my daily withdrawal limit"
+    },
+    "output": {
+      "value": {
+        "answer": "The Market Square ATM is 0.1 mi away and open 24 h, and your daily ATM withdrawal limit is $1,000.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194",
+          "debit"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_atm",
+          "card_limits"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Find a branch near me, its hours, and the nearest ATM"
+    },
+    "output": {
+      "value": {
+        "answer": "Main St Branch is 0.4 mi away, open until 5 pm on weekdays and 1 pm on Saturday, and the Market Square ATM is 0.1 mi away.",
+        "arguments": [
+          "",
+          "37.7749, -122.4194",
+          "BR-4417",
+          "37.7749, -122.4194"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "get_location",
+          "find_nearest_branch",
+          "branch_hours",
+          "find_nearest_atm"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Find a branch downtown and tell me its hours"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Tell me my savings balance, the interest it earned, and that balance in euros"
+    },
+    "output": {
+      "value": {
+        "answer": "Savings is $8,120.55, it earned $27.14 in interest last month, and that comes to 7,470.91 EUR.",
+        "arguments": [
+          "savings",
+          "savings",
+          "$8,120.55"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "account_balance",
+          "interest_earned",
+          "convert_currency"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "pts balance"
+    },
+    "output": {
+      "value": {
+        "answer": "You have 18,420 reward points.",
+        "arguments": [
+          ""
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "reward_points"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What's my balance, my credit score, and my reward points?"
+    },
+    "output": {
+      "value": {
+        "answer": "Checking is $2,340.12 and savings is $8,120.55, your credit score is 742, and you have 18,420 reward points.",
+        "arguments": [
+          "all",
+          "",
+          ""
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "account_balance",
+          "credit_score",
+          "reward_points"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Show my balance and this week's transactions"
+    },
+    "output": {
+      "value": {
+        "answer": "Checking is $2,340.12 and savings is $8,120.55, with recent activity including $6.45 at Starbucks and $82.19 at Amazon.",
+        "arguments": [
+          "all",
+          "7"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "account_balance",
+          "list_transactions"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Show my recent transactions, pending payments, and scheduled payments"
+    },
+    "output": {
+      "value": {
+        "answer": "Recent activity includes $6.45 at Starbucks and $82.19 at Amazon, Netflix for $15.49 is pending, and rent of $1,850 is scheduled for the 1st.",
+        "arguments": [
+          "7",
+          "all",
+          "all"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "list_transactions",
+          "pending_payments",
+          "scheduled_payments"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Show my recent transactions"
+    },
+    "output": {
+      "value": {
+        "answer": "Recent activity includes $6.45 at Starbucks, $82.19 at Amazon, and $114.62 at Whole Foods Market.",
+        "arguments": [
+          "7"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "list_transactions"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Give me my account number, routing number, and debit card number"
+    },
+    "output": {
+      "value": {
+        "answer": "Account number 4471 9082 3341, routing number 011000000, and debit card 4532 7712 0034 9921.",
+        "arguments": [
+          "checking",
+          "checking",
+          "debit"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "account_number",
+          "routing_number",
+          "card_number"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Get my June statement"
+    },
+    "output": {
+      "value": {
+        "answer": "Your June statement for the checking account is ready under Documents.",
+        "arguments": [
+          "June"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "bank_statement"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What did I spend at Amazon and Starbucks, and what's my card limit?"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $82.19 at Amazon and $6.45 at Starbucks, and your card limits are a $10,000 credit limit, a $5,000 daily spending limit, and a $1,000 daily ATM withdrawal limit.",
+        "arguments": [
+          "Amazon",
+          "Starbucks",
+          "all"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "search_transactions",
+          "search_transactions",
+          "card_limits"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What fees did I pay, what interest did I earn, and what's my savings balance?"
+    },
+    "output": {
+      "value": {
+        "answer": "You paid a $12.00 monthly service fee, earned $27.14 in interest, and savings is $8,120.55.",
+        "arguments": [
+          "all",
+          "savings",
+          "savings"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "fees_and_charges",
+          "interest_earned",
+          "account_balance"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What's the status of my Amazon dispute, how much was the charge, and what's my credit card balance?"
+    },
+    "output": {
+      "value": {
+        "answer": "The Amazon dispute is under review with provisional credit issued on Jul 21, the charge was $82.19, and your credit card balance is $1,204.87.",
+        "arguments": [
+          "Amazon",
+          "Amazon",
+          "creditCard"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "get_dispute_status",
+          "search_transactions",
+          "account_balance"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Any ATMs in Chicago?"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Do I have enough in checking to cover the rent payment?"
+    },
+    "output": {
+      "value": {
+        "answer": "Checking is $2,340.12 and the rent transfer is $1,850, so yes.",
+        "arguments": [
+          "checking",
+          "rent"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "account_balance",
+          "scheduled_payments"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "Show my Netflix charges, my pending payments, and my scheduled payments"
+    },
+    "output": {
+      "value": {
+        "answer": "Netflix charged $15.49, that payment is still processing, and rent of $1,850 is scheduled for the 1st.",
+        "arguments": [
+          "Netflix",
+          "all",
+          "all"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "search_transactions",
+          "pending_payments",
+          "scheduled_payments"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "List my scheduled and pending payments"
+    },
+    "output": {
+      "value": {
+        "answer": "Scheduled: rent $1,850 on the 1st, credit card autopay for the statement balance on the 5th, and gym $45 on the 12th. Pending: Netflix $15.49 and PG&E Electricity $96.40.",
+        "arguments": [
+          "all",
+          "all"
+        ],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "scheduled_payments",
+          "pending_payments"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "What ATMs are near Chicago, what's my withdrawal limit, and my checking balance?"
+    },
+    "output": {
+      "value": {
+        "answer": "",
+        "arguments": [],
+        "executedTools": [],
+        "orderMatters": false,
+        "toolOutput": "",
+        "tools": [
+          "none"
+        ]
+      }
+    }
+  }
+]

@@ -125,7 +125,39 @@ final class HybridRouter: ToolRouter {
         let candidateTools = shortlist.compactMap { ToolCatalog.byName[$0.toolName] }
         onUpdate(.selecting)
         let selectionStart = clock.now
-        let plan = try await selector.select(query, from: candidateTools)
+        let plan: LLMRouter.RoutingPlan
+        do {
+            plan = try await selector.select(query, from: candidateTools)
+        } catch where LLMRouter.isDecliningToRoute(error) {
+            // A guardrail trip or refusal is the model declining to route
+            // this at all, which is the same outcome as `none` and is
+            // handled here rather than thrown, so both the app and the
+            // evals see an escalation instead of a failure. See
+            // LLMRouter.isDecliningToRoute for what this cost when it was
+            // an error.
+            //
+            // No token usage recorded: `lastUsage` holds the PREVIOUS
+            // request's numbers when a call throws, and a stale figure
+            // attributed to this turn is worse than a missing one.
+            trace.selection = RoutingTrace.SelectionStage(
+                candidates: candidateTools.map(\.displayName),
+                reasoning: nil,
+                route: .noMatch,
+                plannedCalls: [],
+                policyNotes: [
+                    "The on-device model declined to route this request — a guardrail or refusal. Treated as an escalation, exactly like an explicit `none`, rather than surfaced as an error."
+                ],
+                promptTokens: nil,
+                outputTokens: nil,
+                duration: clock.now - selectionStart
+            )
+            return RoutingResult(
+                strategyName: strategyName,
+                reasoning: "The on-device model declined to route this request; answering with the cloud model.",
+                calls: [RoutedCall(tool: ToolName.none, confidence: nil)],
+                trace: trace
+            )
+        }
         let selectionDuration = clock.now - selectionStart
         // Read here, with no suspension between this and the call above,
         // so it cannot belong to a different request.
@@ -138,7 +170,7 @@ final class HybridRouter: ToolRouter {
         func recordSelection(_ notes: [String]) {
             trace.selection = RoutingTrace.SelectionStage(
                 candidates: candidateTools.map(\.displayName),
-                reasoning: nil, // the model no longer writes one; see RoutingPlan
+                reasoning: plan.reasoning.isEmpty ? nil : plan.reasoning,
                 route: plan.toolNames.contains(ToolName.none.displayName) ? .noMatch : .useTools,
                 plannedCalls: plan.toolNames.map {
                     // No arguments: Stage 2 selects names and nothing
@@ -176,7 +208,12 @@ final class HybridRouter: ToolRouter {
             recordSelection([LLMRouter.escalationNote(for: plan)])
             return RoutingResult(
                 strategyName: strategyName,
-                reasoning: LLMRouter.escalationNote(for: plan),
+                // Both halves: what the model said, then what policy did
+                // with it. An escalation that reports only the policy
+                // note explains the outcome and not the decision.
+                reasoning: [plan.reasoning, LLMRouter.escalationNote(for: plan)]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " · "),
                 calls: [RoutedCall(tool: ToolName.none, confidence: nil)],
                 trace: trace
             )
@@ -206,9 +243,6 @@ final class HybridRouter: ToolRouter {
                 boundTools: boundTools,
                 invocations: answer.invocations,
                 answer: answer.text,
-                retriedForUnverifiedFigures: answer.retriedForUnverifiedFigures,
-                rejectedFigures: answer.rejectedFigures,
-                rejectedDraft: answer.rejectedDraft,
                 failure: nil,
                 timeToFirstToken: answer.timeToFirstToken,
                 promptTokens: answer.promptTokens,
@@ -216,7 +250,7 @@ final class HybridRouter: ToolRouter {
             )
             return RoutingResult(
                 strategyName: strategyName,
-                reasoning: nil,
+                reasoning: plan.reasoning.isEmpty ? nil : plan.reasoning,
                 calls: routedCalls,
                 answer: answer.text,
                 executedTools: answer.executedTools,
@@ -231,9 +265,6 @@ final class HybridRouter: ToolRouter {
                 boundTools: boundTools,
                 invocations: [],
                 answer: nil,
-                retriedForUnverifiedFigures: false,
-                rejectedFigures: [],
-                rejectedDraft: nil,
                 failure: (error as? LocalizedError)?.errorDescription ?? "\(error)",
                 timeToFirstToken: nil,
                 promptTokens: nil,

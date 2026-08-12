@@ -1,7 +1,13 @@
 import Foundation
 import FoundationModels
 
-// MARK: - Arithmetic (Stage 3 only, always bound)
+// MARK: - Arithmetic (NOT BOUND — see the end of this comment)
+//
+// UNBOUND SINCE 2026-08-12. This type still exists and ComputeToolTests
+// still exercise it, but ToolExecutionAgent no longer hands it to the
+// model, so nothing in the app can call it. Read the rest of this header
+// as the argument that WAS made for binding it, then the measurement
+// that ended it.
 //
 // Lets the model REASON about figures without ever AUTHORING one. It
 // picks the operands and the operation — semantic work a 3B model
@@ -10,8 +16,9 @@ import FoundationModels
 // "1") were the model failing to RETYPE a figure correctly; nothing
 // about that suggests it can be trusted to compute one.
 //
-// The result comes back as tool output, so it lands in AnswerVerifier's
-// allowed set through the normal channel and the guard needs no change.
+// The result comes back as tool output, so it enters the transcript
+// through the normal channel and the answer can quote it like any other
+// tool result.
 //
 // DELIBERATELY NOT IN ToolCatalog, which is why `catalogEntry` is not
 // used here. The catalog is what Stage 1 embeds and Stage 2 selects
@@ -26,18 +33,34 @@ import FoundationModels
 //   - In the catalog it would compete for top-k slots and could displace
 //     a real data tool, trading the figures for the calculator.
 //
-// So the agent binds it unconditionally alongside the routed plan. That
+// So the agent bound it unconditionally alongside the routed plan. That
 // is O(plan)+1 rather than the O(catalog) session ToolExecutionAgent
 // argues against, and the tool breaking the rule is the one that is not
 // a data source.
 //
-// THE HOLE THIS WOULD OPEN WITHOUT `allowedSources`: the model invents
-// $4,000, passes it here, and gets back a correctly-calculated result —
-// which is now tool output, so the verifier whitelists it. A fabricated
-// figure would launder itself into a verified one and take the only
-// deterministic gate in the suite with it. Validating operands against
-// what the tools actually returned is the load-bearing part of this
-// file; the arithmetic is the easy half.
+// THE OPERANDS ARE TAKEN ON TRUST. Nothing here checks that a figure the
+// model passes in actually came from a tool, so an invented $4,000 gets
+// a correctly-calculated result and that result becomes tool output like
+// any other. That check used to exist and was removed with
+// AnswerVerifier; if fabricated figures start showing up, this is where
+// the guard goes back.
+//
+// THEY SHOWED UP. On the 2026-08-12 failing-sample run this tool was in
+// 9 of 20 trajectories and behind every invented headline figure: a
+// $5,435.90 "balance" on a question where account_balance was never
+// called at all, $4,190.12 of "June spending" for a request that only
+// wanted the statement, an $11,665.54 all-accounts total offered as the
+// checking balance. Not one of those questions asked for arithmetic. The
+// figures were not stable between runs either, so it was not one bad
+// formula — the model reached for the calculator INSTEAD OF the lookup,
+// then reported the result in place of the figure it was asked for.
+//
+// The paragraph above says the guard goes back here. It went somewhere
+// cheaper instead: the tool is no longer bound, so there is no untrusted
+// operand to check. The cost is genuine cross-tool arithmetic — "does
+// checking cover rent" is now answered by stating both figures — and the
+// tools that most needed a total (search_transactions) already return
+// their own. Bind it again and the operand check is the price.
 final class ComputeTool: Tool, @unchecked Sendable {
     let name = "compute"
     let description = """
@@ -46,23 +69,6 @@ final class ComputeTool: Tool, @unchecked Sendable {
         whenever the answer needs a number no tool returned directly. \
         Never do the arithmetic yourself.
         """
-
-    /// The text the tools have returned so far, plus the user's own
-    /// question — the only figures this tool will compute with.
-    ///
-    /// A closure rather than a value because of a chicken-and-egg: the
-    /// tool has to exist before the session that will hold the
-    /// transcript. The agent wires it immediately after creating the
-    /// session; left unwired it returns nothing, which fails closed —
-    /// every operand is rejected rather than silently trusted.
-    ///
-    /// Deliberately a non-`Sendable` closure. It reads the session's
-    /// transcript, and the session is not `Sendable`; typing it this way
-    /// keeps the capture legal at the assignment site. The class is
-    /// `@unchecked Sendable` to match. In practice the read is a
-    /// snapshot of an append-only transcript taken while the session is
-    /// blocked awaiting this call, so there is no concurrent writer.
-    var allowedSources: () -> [String] = { [] }
 
     // MARK: Arguments
 
@@ -120,10 +126,15 @@ final class ComputeTool: Tool, @unchecked Sendable {
     /// model can read what it did wrong and call again with figures it
     /// actually has.
     func call(arguments: Arguments) async throws -> String {
-        let values: [Decimal]
-        switch Self.resolve(arguments.operands, against: allowedSources()) {
-        case .failure(let message): return message
-        case .success(let resolved): values = resolved
+        var values: [Decimal] = []
+        for operand in arguments.operands {
+            guard let value = Self.parse(operand) else {
+                return """
+                    Could not read a number from '\(operand)'. Pass a figure exactly \
+                    as a tool returned it.
+                    """
+            }
+            values.append(value)
         }
 
         switch arguments.operation {
@@ -158,47 +169,6 @@ final class ComputeTool: Tool, @unchecked Sendable {
     }
 
     // MARK: Operands
-
-    private enum Resolution {
-        case success([Decimal])
-        case failure(String)
-    }
-
-    /// Turns the model's operand strings into decimals, refusing any
-    /// figure that appears in none of `sources`.
-    ///
-    /// Compared in `AnswerVerifier`'s canonical form, so the model may
-    /// copy "$12.00" as "12" — the same latitude the verifier gives an
-    /// answer. Anything with no source at all is refused outright.
-    private static func resolve(_ operands: [String], against sources: [String]) -> Resolution {
-        let allowed = Set(
-            sources
-                .flatMap { AnswerVerifier.numerals(in: $0) }
-                .map(AnswerVerifier.canonical)
-        )
-
-        var values: [Decimal] = []
-        for operand in operands {
-            guard let value = parse(operand) else {
-                return .failure("""
-                    Could not read a number from '\(operand)'. Pass a figure exactly \
-                    as a tool returned it.
-                    """)
-            }
-
-            let figures = AnswerVerifier.numerals(in: operand).map(AnswerVerifier.canonical)
-            // An operand with no numerals in it cannot be traced, so it
-            // is refused rather than allowed through on an empty check.
-            guard !figures.isEmpty, figures.allSatisfy(allowed.contains) else {
-                return .failure("""
-                    '\(operand)' is not a figure any tool returned. Only calculate with \
-                    the figures already in this conversation.
-                    """)
-            }
-            values.append(value)
-        }
-        return .success(values)
-    }
 
     /// Decimal, never Double — this is money. Strips currency symbols and
     /// thousands separators so the model can copy a figure verbatim.

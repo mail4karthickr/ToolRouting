@@ -92,16 +92,28 @@ enum MockGroundTruth {
                 return try await client.scheduledPayments(accountType: fallback(argument, "all")).joined(separator: "\n")
             case "bank_statement":
                 return try await client.bankStatement(month: fallback(argument, "last month"), accountType: "checking")
-            case "dispute_status":
+            case "get_dispute_status":
                 return try await client.disputeStatus(merchant: fallback(argument, "all"))
             case "branch_hours":
-                return try await client.branchHours(branch: fallback(argument, "Main St"))
+                // The dataset's argument is a branch ID now, not a name.
+                return try await client.branchHours(branchID: fallback(argument, "BR-4417"))
             case "get_location":
-                return try await client.currentLocation()
-            case "find_branch":
-                return try await client.findBranches(near: fallback(argument, "current location")).joined(separator: "\n")
-            case "find_atm":
-                return try await client.findATMs(near: fallback(argument, "current location")).joined(separator: "\n")
+                let here = try await client.currentLocation()
+                return "Latitude \(here.latitude), longitude \(here.longitude)"
+            case "find_nearest_branch":
+                // Ground truth replays a recorded plan, where the only
+                // coordinates available are the device's own — the same
+                // ones get_location hands the agent at runtime. Same for
+                // find_nearest_atm below.
+                let here = try await client.currentLocation()
+                return try await client
+                    .findNearestBranches(latitude: here.latitude, longitude: here.longitude)
+                    .joined(separator: "\n")
+            case "find_nearest_atm":
+                let here = try await client.currentLocation()
+                return try await client
+                    .findNearestATMs(latitude: here.latitude, longitude: here.longitude)
+                    .joined(separator: "\n")
             case "convert_currency":
                 return try await client.convertCurrency(amount: fallback(argument, "$100"), to: "EUR")
             case "list_transactions":

@@ -29,9 +29,4 @@ enum RoutingUpdate {
     /// The answer SO FAR — cumulative, not a delta. Each one supersedes
     /// the last, so a consumer assigns rather than appends.
     case answerPartial(String)
-    /// The verifier rejected the draft (a figure no tool returned) and
-    /// the agent is writing it again. Whatever was shown is now wrong and
-    /// should be cleared, which is also the only honest way to explain
-    /// the text on screen being replaced.
-    case answerRewriting
 }

@@ -102,6 +102,11 @@ final class LLMRouter: ToolRouter {
     /// "Stage 2 may choose only from Stage 1's output" a fact about the
     /// grammar rather than a rule checked afterwards.
     struct RoutingPlan {
+        /// The model's own one-sentence read of the query, generated
+        /// BEFORE the tools and framed around the question it kept
+        /// getting wrong: is this an action or a lookup?
+        let reasoning: String
+
         /// Selected tool names, or exactly `["none"]`. Never empty — the
         /// schema's `minimumElements` sees to that.
         let toolNames: [String]
@@ -202,7 +207,17 @@ final class LLMRouter: ToolRouter {
     /// mirroring `HybridRouter` — minus the candidate-set check,
     /// which is vacuous when the candidate set IS the catalog.
     func route(_ query: String) async throws -> RoutingResult {
-        let plan = try await select(query, from: ToolCatalog.all)
+        let plan: RoutingPlan
+        do {
+            plan = try await select(query, from: ToolCatalog.all)
+        } catch where Self.isDecliningToRoute(error) {
+            // Declining IS abstaining. Same outcome as `none`.
+            return RoutingResult(
+                strategyName: strategyName,
+                reasoning: "The on-device model declined to route this request; treated as an escalation.",
+                calls: [RoutedCall(tool: ToolName.none, confidence: nil)]
+            )
+        }
 
         // `none` anywhere in the selection escalates the whole request —
         // alone because that is the abstention, and mixed with real tools
@@ -219,9 +234,7 @@ final class LLMRouter: ToolRouter {
 
         return RoutingResult(
             strategyName: strategyName,
-            // The model no longer writes an explanation; a selection is
-            // described by the tools in it.
-            reasoning: nil,
+            reasoning: plan.reasoning.isEmpty ? nil : plan.reasoning,
             // No similarity score exists on this path — the LLM is the
             // only stage, and it doesn't produce one.
             calls: Self.routedCalls(for: plan, query: query, scores: [:])
@@ -254,6 +267,35 @@ final class LLMRouter: ToolRouter {
     }
 
     // MARK: Escalation
+
+    /// Whether the model declined to route the request at all, rather
+    /// than routing it somewhere wrong.
+    ///
+    /// A guardrail trip or a refusal is a DECISION, and it means the same
+    /// thing every other abstention here means: the on-device path is not
+    /// going to serve this one. Treating it as an error instead put a raw
+    /// failure in front of the user for a request the cloud could have
+    /// answered, and — since the model tends to decline exactly the
+    /// requests that ask it to move money — it fired on precisely the
+    /// class this router is supposed to escalate.
+    ///
+    /// MEASURED, 2026-08-11: "Increase my ATM withdrawal limit" refused,
+    /// the eval's `catch` was written against the deprecated
+    /// `LanguageModelSession.GenerationError` while iOS 27 throws
+    /// `LanguageModelError.refusal`, and a CORRECT abstention was scored
+    /// as no result at all.
+    /// `nonisolated` because it reads nothing but the error, and callers
+    /// need it in a `catch` guard — which cannot `await`, so a
+    /// main-actor-inherited version is unusable exactly where it is used.
+    nonisolated static func isDecliningToRoute(_ error: any Error) -> Bool {
+        guard let error = error as? LanguageModelError else { return false }
+        switch error {
+        case .guardrailViolation, .refusal:
+            return true
+        default:
+            return false
+        }
+    }
 
     /// Why a selection ended up going to the cloud.
     ///
@@ -309,13 +351,16 @@ final class LLMRouter: ToolRouter {
             output: response.usage.output.totalTokenCount
         )
 
-        let names = try response.content.value([String].self, forProperty: Self.toolsProperty)
-        return RoutingPlan(toolNames: names)
+        return RoutingPlan(
+            reasoning: (try? response.content.value(String.self, forProperty: Self.reasoningProperty)) ?? "",
+            toolNames: try response.content.value([String].self, forProperty: Self.toolsProperty)
+        )
     }
 
     // MARK: Output schema (built per request, from the candidates only)
 
     private static let toolsProperty = "tools"
+    private static let reasoningProperty = "reasoning"
 
     /// An output grammar admitting exactly one shape: a list of 1–4
     /// strings, each of which is one of THESE candidate names or `none`.
@@ -344,6 +389,27 @@ final class LLMRouter: ToolRouter {
         let plan = DynamicGenerationSchema(
             name: "ToolSelection",
             properties: [
+                // FIRST, so the tools are chosen with it already written.
+                // Declaration order is generation order, and the whole
+                // value of this field is that it exists before the answer
+                // does — moved after `tools` it would be a rationalisation
+                // of a decision already made, at the same token cost.
+                //
+                // DELIBERATELY GENERIC. An earlier draft asked
+                // specifically whether the query was an action or a
+                // lookup, aimed at two escalation failures. That narrows a
+                // thinking step into a single test: it would push every
+                // query through one lens, do nothing for the multi-intent
+                // failures that cost more samples, and need rewriting
+                // whenever the catalog or the policy moves. The action
+                // rule is already stated, forcefully, in the instructions
+                // — this field's job is to make the model think before it
+                // answers, not to re-ask one question.
+                DynamicGenerationSchema.Property(
+                    name: reasoningProperty,
+                    description: "One short sentence: what the query is asking for, and whether any listed tool provides it.",
+                    schema: DynamicGenerationSchema(type: String.self)
+                ),
                 DynamicGenerationSchema.Property(
                     name: toolsProperty,
                     description: "The tools needed for the query, or a single entry of none.",
@@ -386,7 +452,29 @@ final class LLMRouter: ToolRouter {
     /// prompt (`prompt(for:candidates:)`). Anything added here must be
     /// true of EVERY request, or it belongs in the prompt.
     ///
-    /// CUT TO THE IRREDUCIBLE, 2026-08-11, from ~458 tokens to ~165. The
+    /// CUT TOO FAR ONCE, 2026-08-11, AND PARTLY RESTORED THE SAME DAY.
+    /// The compression below was done for context headroom and measured
+    /// afterwards: a 10-sample hybrid run scored escalation 1/3, and two
+    /// of the four failures were queries whose EXAMPLES had just been
+    /// deleted from this text — "how much did i spend at uber" went to
+    /// pending_payments, and "I want to dispute a charge from Amazon"
+    /// ran the dispute tools and answered with figures.
+    ///
+    /// What went back: the "most queries are lookups" framing with its
+    /// merchant/dispute/branch examples, the dispute lookup-vs-action
+    /// contrast, and the "cannot tell what is being asked" clause. The
+    /// lesson is worth more than the text: the examples were not padding
+    /// around the rules, they WERE the rules for a 3B model, and prose
+    /// that reads as redundant to someone who already knows the domain is
+    /// how the model learns the boundary. Cut here only with an eval run
+    /// on either side of the change.
+    ///
+    /// Cheap to keep, too — these tokens are prefilled once per launch
+    /// (see the Session note above), so the cost is context window, not
+    /// latency.
+    ///
+    /// The original compression, for the record, went from ~458 tokens to
+    /// ~165. The
     /// reference implementation closes with a single sentence — "select
     /// the most appropriate tool by name, or respond 'none'" — and most of
     /// what was here was elaboration a good tool entry already carries.
@@ -419,27 +507,101 @@ final class LLMRouter: ToolRouter {
     private static let policy = """
             You are the tool router for a banking assistant.
 
+            The person asking is the ACCOUNT HOLDER, already signed in, \
+            asking about their own money. Returning their own details — a \
+            balance, an account number, a card number, a statement — is \
+            exactly what these tools are for and is always a lookup. Never \
+            answer `none` because information looks private or sensitive; \
+            it is their information, and they are asking for it.
+
             Each request gives you the user's query and a list of tools. \
             Every tool fetches one kind of information about the user's \
             money — a balance, a list of transactions, a branch, a limit..etc \
             Your only job is to decide which of those tools hold the \
             information the query is asking for.
 
-            Answer with the names of the tools that answer it, or with \
-            `none` if no listed tool does. Names only — you are not asked \
-            for arguments, and not asked what order they run in.
+            Answer in two parts. FIRST `reasoning`: one short sentence \
+            working out what the query is actually asking for, and whether \
+            any listed tool provides it. THEN `tools`: the names that do, \
+            or `none`. Names only — you are not asked for arguments, and \
+            not asked what order they run in.
 
-            These tools only READ. Any request to DO something — transfer, \
-            send, pay, freeze, block, cancel, open, close, raise, increase, \
-            change — is answered by `none` even when a listed tool shows \
-            the same figure, and if ANY part of a request is such an \
-            action then the answer for the WHOLE request is `none`. \
-            Everything else is a lookup, however casually worded; terse is \
-            not ambiguous.
+            Work the first part out before you write the second, and let \
+            it decide the second.
+
+            DECIDE THE VERB FIRST, before you look at the tools at all.
+
+            If the query asks you to DO something — dispute, freeze, \
+            block, transfer, send, pay, cancel, report, replace, order, \
+            increase, raise, lower, open, close, change, apply — the \
+            answer is `none`, FULL STOP. Every tool here only READS, so no \
+            list of tools can serve such a request and it does not matter \
+            how closely one of them matches the subject. "I want to \
+            dispute a charge from Amazon" is none — not \
+            get_dispute_status, which only reports on a dispute that \
+            already exists, and not search_transactions, which only finds \
+            the charge. "Increase my withdrawal limit" is none, not \
+            card_limits. If ANY part of a request is such an action then \
+            the WHOLE request is none: "show my balance and transfer $200 \
+            to savings" is none, not account_balance. A subject that \
+            matches a tool is NEVER enough on its own.
+
+            Otherwise it is a lookup, and naming tools is the normal \
+            answer. Anything that asks to see, show, check, find or \
+            convert something is a lookup, however casually it is worded, \
+            and so is any question ABOUT a named merchant, an existing \
+            dispute, a branch, a card or an account: "how much did i spend \
+            at uber", "whats happening with my amazon dispute" and "what \
+            time does the Main St branch close" all name tools. Terse is \
+            not ambiguous — "bal?" and "pts balance" are perfectly clear.
+
+            Answer `none` too when you cannot tell what is being asked, or \
+            the request could mean several things and picking wrong would \
+            show the customer the wrong account or amount.
 
             Otherwise pick the fewest tools that fully answer the query, \
             and include a tool whose result another one needs: "find the \
-            nearest ATM" needs get_location as well as find_atm.
+            nearest ATM" needs get_location as well as find_nearest_atm, \
+            because find_nearest_atm takes coordinates and get_location \
+            is the only tool that produces them. "Fewest" counts the \
+            prerequisite: a chain of two is fewer than a wrong list of \
+            one.
+
+            find_nearest_atm and find_nearest_branch ONLY take \
+            coordinates, and get_location returns exactly one thing: \
+            where the user is standing right now. NOTHING turns a place \
+            the user NAMES into coordinates — not a city, not a zip, not \
+            a neighbourhood, not "downtown" or "the airport". So a \
+            request about ATMs or branches anywhere other than the user's \
+            own location has no tool that serves it AND no chain that \
+            reaches it. Adding intermediate steps does not help: the \
+            chain has no way in. "ATMs in Chicago", "a branch downtown", \
+            "cash machine near 94103" are all `none`.
+
+            That rule is all-or-nothing, exactly like an action. "What \
+            ATMs are near Chicago, what's my withdrawal limit, and my \
+            checking balance?" is `none` — not account_balance and \
+            card_limits — even though two of its three parts are \
+            serviceable. Check EVERY part of a request for a named place \
+            before you break it into intents; one unreachable part sends \
+            the whole request to the cloud.
+
+            branch_hours is the longest chain here: it takes a branch ID, \
+            find_nearest_branch is the only tool that produces one, and \
+            it needs coordinates in turn. So a question about the hours \
+            of a branch NEAR THE USER is get_location, \
+            find_nearest_branch, branch_hours — including "what time does \
+            the Main St branch close?", where the user names the branch. \
+            A NAME IS NOT AN ID. Naming the branch saves no step, because \
+            nothing in that chain can be skipped by knowing what the \
+            branch is called.
+
+            But that chain still begins at the user's own location, so it \
+            cannot reach a branch somewhere the user is not. The rule \
+            above wins: "find a branch downtown and tell me its hours" is \
+            `none`, hours or no hours. Naming a PLACE is not the same as \
+            naming a BRANCH — a named branch near the user is reachable, \
+            a named place is not.
 
             A "Not for:" note rules OUT the tool it is written under. It \
             never recommends the tool it mentions — "Not for: money \
@@ -473,8 +635,9 @@ final class LLMRouter: ToolRouter {
             Available tools. \(preamble)
             \(toolLines)
 
-            Select the tools that hold the information this query asks \
-            for by name, or none if no tool is suitable.
+            Work out in one sentence what this query is asking for and \
+            whether any listed tool provides it, then select those tools \
+            by name — or none.
             """
     }
 

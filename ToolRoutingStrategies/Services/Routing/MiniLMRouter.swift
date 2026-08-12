@@ -169,21 +169,27 @@ extension ToolName {
         case "search_transactions": .searchTransactions(merchant: query)
         case "routing_number": .routingNumber(account: .checking)
         case "account_number": .accountNumber(account: .checking)
-        case "card_number": .cardNumber(card: .debit)
+        case "card_number": .cardNumber(card: .all)
         case "bank_statement": .bankStatement(month: "last month", account: .checking)
         case "credit_score": .creditScore
         case "get_location": .getLocation
-        case "find_branch": .findBranch(location: query)
-        case "find_atm": .findATM(location: query)
+        // The embedding router selects names without arguments, so these
+        // are placeholder pairs that keep the call renderable — the
+        // hybrid path gets real coordinates from get_location instead.
+        case "find_nearest_branch": .findNearestBranch(latitude: 0, longitude: 0)
+        case "find_nearest_atm": .findNearestATM(latitude: 0, longitude: 0)
         case "fees_and_charges": .feesAndCharges(account: .all)
         case "account_balance": .accountBalance(account: .all)
         case "convert_currency": .convertCurrency(amount: query, to: "USD")
         case "pending_payments": .pendingPayments(account: .all)
         case "scheduled_payments": .scheduledPayments(account: .all)
-        case "card_limits": .cardLimits(card: .credit)
+        case "card_limits": .cardLimits(card: .all)
         case "reward_points": .rewardPoints
-        case "dispute_status": .disputeStatus(merchant: "all")
-        case "branch_hours": .branchHours(branch: query)
+        case "get_dispute_status": .disputeStatus(merchant: "all")
+        // Placeholder, like the coordinate pairs above: the embedding
+        // router names tools without arguments, and a real ID only exists
+        // once find_nearest_branch has run.
+        case "branch_hours": .branchHours(branchID: "")
         case "interest_earned": .interestEarned(account: .all)
         // No case for "none": the index only holds real tools, so an
         // unrecognized name means abstain (nil → empty calls → cloud).

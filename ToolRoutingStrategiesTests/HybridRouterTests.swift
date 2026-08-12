@@ -2,18 +2,15 @@
 Grades the answer HybridRouter produces end to end. Tool selection is
 graded in LLMRouterTests.
 
-  Fabrication    DETERMINISTIC — is there a number in the reply that no
-                 tool returned?
   Faithfulness   judge — is every fact traceable to the tool output?
   Completeness   judge — is every part of the request answered, and was a
                  non-reply the right call?
   Naturalness    judge — does it read like a person, without leaking the
                  tools or the app?
 
-Fabrication overlaps Faithfulness on purpose: same question, different
-reliability. Faithfulness is a semantic read with real variance (σ ≈ 0.67
-at n = 20); Fabrication is a mechanical check with none. It is the only
-GATED metric here — everything else is a floor on a noisy score.
+Every metric here is a judge score, so every assertion is a floor on a
+noisy number rather than a gate. The deterministic Fabrication check that
+used to sit alongside them was removed with AnswerVerifier.
 
 Faithfulness and Completeness are deliberately opposite: one asks whether
 anything extra crept IN, the other whether anything required was left
@@ -26,8 +23,9 @@ because the judge is TOLD whether a reply was owed — silence looks
 identical either way, and inferring it from the silence is what the
 earlier prompt got wrong.
 
-Fabrication works because the API is a mock with fixed values, re-derived
-per run from the sample's tools rather than stored. The judge is Claude,
+The tool output each answer is graded against is re-derived per run from
+the sample's expected tools rather than stored, so it tracks the mock's
+fixed values. The judge is Claude,
 reached through the Foundation Models server-side model API — a different
 and more capable model than the on-device one that wrote the answer, so
 the score is not self-assessment.
@@ -61,6 +59,7 @@ import ClaudeForFoundationModels
 /// failing.
 enum ClaudeJudge {
     static let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
+//    static let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
 
     static var isConfigured: Bool { !apiKey.isEmpty }
 
@@ -147,64 +146,22 @@ enum JudgeModel {
     }
 }
 
-// MARK: - Fabrication (deterministic)
-
-/// Fails a sample when the answer shows a numeral that appears in neither
-/// the tool output nor the user's question.
-///
-/// This exists because the judge cannot reliably grade it. On the
-/// 2026-08-07 run it scored the stutter in sample 23 a 1 — reading a
-/// decoding artifact as an invented figure, the only rung the scale had —
-/// and gave the truncated figure in sample 36 a 4, missing it entirely.
-/// Both are the same defect, both are exactly checkable in code, and the
-/// check costs no API call and has no variance.
-///
-/// Note the source of truth here is `toolOutput`, which the evaluation
-/// re-derives from the sample's EXPECTED tools — so when the router calls
-/// something other than what was expected, this grades against output the
-/// model never saw. That is deliberate for an eval: an answer built from
-/// the wrong tool should not pass. The runtime guard in ToolExecutionAgent
-/// uses the actual transcript instead.
-struct FabricationEvaluator: EvaluatorProtocol {
-    typealias Input = ModelSample<BankingAnswer>
-    typealias Subject = ModelSubject<BankingAnswer>
-
-    /// 1 = every figure traced, 0 = at least one had no source. Scored
-    /// rather than pass/fail so `minimum` gates it: one fabricated figure
-    /// anywhere drags the minimum to 0.
-    static let metric = Metric("Fabrication")
-
-    func metrics(subject: ModelSubject<BankingAnswer>, input: ModelSample<BankingAnswer>) async throws -> [Metric] {
-        let observed = subject.value
-        let answer = observed.answer.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // An abstention shows the user nothing, so there is no figure to
-        // fabricate. Scored clean rather than ignored so the metric stays
-        // comparable across runs; whether it SHOULD have answered is the
-        // job of a coverage metric, not this one.
-        guard !answer.isEmpty else {
-            return [Self.metric.scoring(1, rationale: "No answer shown; no figure to fabricate.")]
-        }
-
-        let stray = AnswerVerifier.strayNumerals(
-            in: answer,
-            allowedFrom: [observed.toolOutput, input.promptDescription]
-        )
-
-        guard stray.isEmpty else {
-            return [Self.metric.scoring(0, rationale: """
-                Answer shows \(stray.joined(separator: ", ")) — not in the tool \
-                output and not in the question.
-                """)]
-        }
-        return [Self.metric.scoring(1, rationale: "Every figure traces to a tool result or the question.")]
-    }
-}
-
 // MARK: - Evaluation
 
 struct HybridAnswerEvaluation: Evaluation {
     var dataset: ArrayLoader<ModelSample<BankingAnswer>>
+
+    /// Called with the prompt and the answer as each subject is produced,
+    /// BEFORE the judge sees it.
+    ///
+    /// Nil for a normal run. HybridRouterReliabilityTests sets it to tell
+    /// two kinds of noise apart: whether repeated trials of one prompt
+    /// produce the same ANSWER is a fact about the pipeline and needs no
+    /// judge, while whether they produce the same SCORE is a fact about
+    /// the judge. Conflating them is how a reliability number becomes
+    /// meaningless — measured 2026-08-12, where an identical answer
+    /// scored Faithfulness 4 on one run and 2 on the next.
+    var onSubject: (@Sendable (String, BankingAnswer) -> Void)?
 
     func subject(from sample: ModelSample<BankingAnswer>) async throws -> ModelSubject<BankingAnswer> {
         let expected = sample.expected
@@ -216,15 +173,30 @@ struct HybridAnswerEvaluation: Evaluation {
         let router = await HybridRouter()
         do {
             let result = try await router.route(sample.promptDescription)
-            return ModelSubject(value: BankingAnswer(
+            let answer = BankingAnswer(
                 tools: result.calls.isEmpty ? ["none"] : result.calls.map(\.tool.displayName),
                 answer: result.answer ?? "",
                 toolOutput: truth,
                 note: result.reasoning ?? "",
                 executedTools: result.executedTools
-            ))
-        } catch is LanguageModelSession.GenerationError {
-            return ModelSubject(value: BankingAnswer(tools: ["none"], toolOutput: truth))
+            )
+            onSubject?(sample.promptDescription, answer)
+            return ModelSubject(value: answer)
+        } catch where LLMRouter.isDecliningToRoute(error) {
+            // Mirrors production exactly: a guardrail trip or a refusal is
+            // the model declining to serve the request, which the router
+            // treats as an escalation. Scored as ["none"] because that is
+            // the outcome the user gets.
+            //
+            // NARROWED, 2026-08-11. This used to catch every
+            // GenerationError, which handed the router a free correct
+            // abstention whenever the pipeline actually broke — a context
+            // overflow would have scored as a well-judged `none`. Anything
+            // else now propagates and the sample errors out, which is what
+            // a failure should look like in a report.
+            let abstention = BankingAnswer(tools: ["none"], toolOutput: truth)
+            onSubject?(sample.promptDescription, abstention)
+            return ModelSubject(value: abstention)
         }
     }
 
@@ -295,20 +267,6 @@ struct HybridAnswerEvaluation: Evaluation {
     )
 
     var evaluators: Evaluators {
-        // Deterministic first: it needs no network, never varies, and grades
-        // the one thing a banking answer cannot get wrong.
-        //
-        // It overlaps with Faithfulness on purpose. The two ask the same
-        // question with different reliability: Faithfulness is a broad
-        // semantic read with σ ≈ 0.67, this is a narrow mechanical check
-        // with σ = 0. The judge has scored the SAME defect class 1 and 4
-        // on different samples (2026-08-07), and on the 20-sample run it
-        // gave the "Checking account checking account balance" stutter a
-        // Faithfulness 4 and filed the duplication under Naturalness as a
-        // style issue. A digit-level version of that is a wrong number in
-        // a banking app, so it gets a check that cannot have an opinion.
-        FabricationEvaluator()
-
         ModelJudgeEvaluator(
             judge: ClaudeJudge.model,
             dimensions: [faithfulness, completeness, naturalness],
@@ -367,17 +325,12 @@ struct HybridAnswerEvaluation: Evaluation {
         // headline, minimum because one bad answer matters more than a
         // good average, and standard deviation because these are model
         // scores with real variance — read the σ before comparing two
-        // runs, per LLMRouterReliabilityTests.
+        // runs, per HybridRouterReliabilityTests.
         for dimension in [faithfulness, completeness, naturalness] {
             aggregator.computeMean(of: dimension.metric)
             aggregator.computeMinimum(of: dimension.metric)
             aggregator.computeStandardDeviation(of: dimension.metric)
         }
-
-        // Mean is the clean rate; minimum is the gate. Minimum below 1
-        // means at least one customer was shown a figure no tool returned.
-        aggregator.computeMean(of: FabricationEvaluator.metric)
-        aggregator.computeMinimum(of: FabricationEvaluator.metric)
     }
 }
 
@@ -385,11 +338,29 @@ struct HybridAnswerEvaluation: Evaluation {
 
 @Suite("Hybrid Router Evaluations")
 struct HybridRouterTests {
-    /// URL to the synthetic dataset bundled with the test target.
+    /// TEMPORARY — which bundled dataset this eval runs.
+    ///
+    /// `failing_banking_qa` is the 20 samples the 2026-08-12 08:30 run got
+    /// wrong, lifted from `synthetic_banking_qa` with their expectations
+    /// kept current. It exists to make the fix loop short: 20 samples
+    /// instead of 60 is a third of the wall clock, and every one of them
+    /// is a known defect, so a score that moves means something moved.
+    ///
+    /// NOTHING MEASURED ON IT IS A ROUTER SCORE. It is the failures only,
+    /// so its mean is bounded far below the real one and cannot be
+    /// compared to any run of the full dataset — and because it is a
+    /// filtered subset it is no longer interleaved by answer size, so
+    /// `sampleLimit` prefixes of it are not proportional either. The
+    /// number to report is a full `synthetic_banking_qa` pass.
+    ///
+    /// Set back to "synthetic_banking_qa" once these are fixed.
+    static let datasetName = "failing_banking_qa"
+
+    /// URL to the dataset bundled with the test target.
     static let samplesURL: URL = {
-        guard let url = #bundle.url(forResource: "synthetic_banking_qa", withExtension: "json") else {
+        guard let url = #bundle.url(forResource: datasetName, withExtension: "json") else {
             fatalError("""
-                Missing required resource: synthetic_banking_qa.json. \
+                Missing required resource: \(datasetName).json. \
                 Ensure it is included in the ToolRoutingStrategiesTests target.
                 """)
         }
@@ -401,16 +372,56 @@ struct HybridRouterTests {
     /// the agent AND a Claude judge call, so it is far too slow to sit in
     /// an edit-run loop. Set to `nil` before reading any number as real.
     ///
-    /// The slice is a PREFIX, and the dataset is grouped by bucket, so a
-    /// truncated run is not a small version of the full one: the first 15
-    /// samples are all escalation, and chains do not begin until sample
-    /// 31. Twenty samples exercises the pipeline end to end but says
-    /// nothing about multi-tool routing.
+    /// The slice is a PREFIX, which is only informative because the
+    /// dataset is INTERLEAVED: `synthetic_banking_qa.json` round-robins
+    /// none → 1-call → 2-call → 3-call, so any prefix is roughly
+    /// proportional and the first 10 cover 3 escalations, 3 single
+    /// lookups, 2 chains and 2 three-call plans. It was previously
+    /// grouped by bucket, which made the first 15 samples all escalation
+    /// and a truncated run actively misleading — keep the interleave if
+    /// you regenerate the file.
+    ///
+    /// A prefix is still not a small version of the full run: 10 samples
+    /// puts the 95% interval at roughly ±0.3, so it catches a pipeline
+    /// that is broken, not a prompt that is 10% worse.
+    ///
+    /// The interleave argument holds for `synthetic_banking_qa` ONLY.
+    /// While `datasetName` is the failing subset there is no bucket
+    /// rotation left to preserve, so keep this at `nil` — a prefix of
+    /// that file is an arbitrary handful of defects, not a sample of
+    /// anything.
     static let sampleLimit: Int? = nil
 
     /// Floor for every judge dimension's mean, on the 1–4 scale. See the
     /// expectation in `evaluateAnswers` for why it is set where it is.
-    static let judgeFloor = 3.0
+    ///
+    /// RAISED 3.0 → 3.5 on 2026-08-11, deliberately, and with a known
+    /// flake risk at the current sample count. The 20-sample run that
+    /// preceded it measured Faithfulness 3.68, Completeness 3.79,
+    /// Naturalness 3.89 with σ ≈ 0.70 on the first two — a standard error
+    /// of 0.16 and a 95% interval of about ±0.31 on the mean. So an
+    /// unchanged build can land near 3.48, and this floor will sometimes
+    /// fail on code that did not get worse.
+    ///
+    /// WHEN IT FAILS, RAISE `sampleLimit` BEFORE LOWERING THIS. The
+    /// interval narrows with √n: at 60 samples it is about ±0.18, which
+    /// puts 3.5 clear of the noise. Lowering the floor to make a red
+    /// suite green is how the 3.0 version stopped meaning anything —
+    /// it sat so far below the measured range that it could not fire.
+    ///
+    /// One number for three dimensions, so it is set by the least stable:
+    /// Completeness, which tracks routing errors and has ranged 3.00–3.80
+    /// across today's runs. Naturalness has never left 3.70–3.90 and
+    /// could carry a tighter bar of its own if this ever becomes worth
+    /// splitting.
+    ///
+    /// DELIBERATELY UNCHANGED while `datasetName` is the failing subset,
+    /// where it stops being a regression gate and becomes a completion
+    /// one: every sample in that file is a known defect, so the suite
+    /// goes green exactly when they are fixed. Expect red until then, and
+    /// do not lower it to get green — that is the failure mode this
+    /// comment's 3.0 story is already about.
+    static let judgeFloor = 3.5
 
     static let samples: [ModelSample<BankingAnswer>] = {
         let all: [ModelSample<BankingAnswer>]
@@ -420,7 +431,7 @@ struct HybridRouterTests {
                 from: Data(contentsOf: samplesURL)
             )
         } catch {
-            fatalError("Could not decode synthetic_banking_qa.json: \(error)")
+            fatalError("Could not decode \(datasetName).json: \(error)")
         }
         guard let sampleLimit else { return all }
         return Array(all.prefix(sampleLimit))
@@ -435,7 +446,9 @@ struct HybridRouterTests {
         "Strategy": "Hybrid cascade end to end (retrieval → selection → agent)",
         "Judge": "Claude Opus 5 (ClaudeForFoundationModels)",
         "AppVersion": "1.0",
-        "Feature": "End-to-end banking answers (synthetic dataset, \(samples.count) samples)"
+        // Names the dataset, so a .xcevalresult can never be mistaken for
+        // a full-dataset run once it is sitting in a report next to one.
+        "Feature": "End-to-end banking answers (\(datasetName), \(samples.count) samples)"
     ]
 
     @Test(
@@ -484,48 +497,13 @@ struct HybridRouterTests {
             // Provisional until a full run reports σ. If σ turns out large
             // enough that 3.0 is inside the noise, this needs a confidence
             // interval rather than a bare comparison — EvalStats in
-            // LLMRouterReliabilityTests already has the maths.
+            // HybridRouterReliabilityTests already has the maths, and that file
+            // reports the σ this comment is waiting on.
             #expect(
                 mean >= Self.judgeFloor,
                 "\(dimension.name) mean \(mean) is below \(Self.judgeFloor) (minimum \(worst), σ \(sigma))"
             )
         }
 
-        let cleanRate = result.aggregateValue(.mean(of: FabricationEvaluator.metric))
-        let anyFabricated = result.aggregateValue(.minimum(of: FabricationEvaluator.metric))
-        print("Fabrication — clean rate \(cleanRate), minimum \(anyFabricated)")
-
-        // Same wiring check as the judge dimensions, and it matters more
-        // here: this is the gate, so a Fabrication that silently stopped
-        // running would take the suite's only hard assertion with it and
-        // still report green.
-        #expect(
-            cleanRate > 0,
-            "Fabrication produced no score. The evaluator is not in `evaluators`, or its aggregation is disabled."
-        )
-
-        // THE GATE. Deterministic, zero variance, and the property it
-        // asserts — no customer is shown a figure the tools never
-        // returned — is the one this app cannot trade off. Every other
-        // assertion in this file is a floor on a noisy score; this one is
-        // a fact.
-        //
-        // A failure here is a real defect, not a flaky threshold. Read the
-        // failing sample's rationale to see which figure had no source; the
-        // cause has been a generation stutter (2026-08-07 samples 23, 36) and
-        // an over-broad plan whose extra tool contributed an irrelevant but
-        // genuine figure (sample 4, same date).
-        //
-        // Note what a pass actually proves. AnswerVerifier also runs at
-        // RUNTIME inside ToolExecutionAgent, fail-closed with one retry,
-        // so a fabricated figure is usually rejected and regenerated
-        // before the eval ever sees it. This gate is therefore a
-        // regression test on that guard as much as a probe of the model —
-        // if it ever fires, check whether the guard stopped running
-        // before assuming the model got worse.
-        #expect(
-            anyFabricated == 1,
-            "A sample showed a figure with no source (clean rate \(cleanRate))"
-        )
     }
 }

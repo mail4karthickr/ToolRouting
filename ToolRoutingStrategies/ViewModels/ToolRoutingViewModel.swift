@@ -98,16 +98,23 @@ final class ToolRoutingViewModel {
                 $0.text = answered.answer ?? ""
                 $0.timing.total = clock.now - start
             }
-        } catch let error as LanguageModelSession.GenerationError {
-            // Same production principle: a routing failure should degrade
-            // to the cloud model, not a dead end for the user. The
-            // in-flight bubble becomes the error, so a turn never ends
-            // still claiming to be running.
+        } catch let error as LanguageModelError {
+            // NOT EVERY FAILURE IS AN ESCALATION, and the difference is
+            // the point. Exactly two — a guardrail trip and a refusal —
+            // mean "the on-device path will not serve this", and those
+            // never reach here: HybridRouter turns them into a cloud
+            // fallback, because declining is a routing answer rather than
+            // a routing failure.
+            //
+            // What reaches here is the genuinely broken, and sending it
+            // to the cloud would be wrong. A context overflow in
+            // particular is a CLIENT problem — the request outgrew a
+            // 4,096-token window — and forwarding it off-device turns a
+            // fixable local condition into an unnecessary round trip
+            // (and, for a request that was too long precisely because it
+            // carried a lot of the user's data, an unnecessary one to
+            // make). The user is told, and nothing leaves the device.
             messages[index].content = .error(Self.friendlyMessage(for: error))
-            messages.append(ChatMessage(content: .assistant(AssistantTurn(
-                stage: .done,
-                result: Self.cloudFallback(reason: "On-device routing failed; answering with the cloud model.")
-            ))))
         } catch {
             messages[index].content = .error(error.localizedDescription)
         }
@@ -141,16 +148,6 @@ final class ToolRoutingViewModel {
                 $0.stage = .answering
                 $0.text = text
             }
-        case .answerRewriting:
-            // The draft was wrong and is being retracted. Clearing the
-            // text is the point: leaving it would let a figure the
-            // verifier rejected sit on screen while its replacement is
-            // written. TTFT is left alone — the user did see a first
-            // token, and pretending otherwise would flatter the number.
-            update(at: index) {
-                $0.stage = .rewriting
-                $0.text = ""
-            }
         }
     }
 
@@ -170,14 +167,26 @@ final class ToolRoutingViewModel {
         )
     }
 
-    private static func friendlyMessage(for error: LanguageModelSession.GenerationError) -> String {
+    /// What to tell the user about a failure that stays on the device.
+    ///
+    /// Every case here is one the cloud is NOT the answer to, so each
+    /// message says what happened and, where there is one, what the user
+    /// can do about it. `guardrailViolation` and `refusal` are absent on
+    /// purpose: HybridRouter escalates those before they get this far.
+    private static func friendlyMessage(for error: LanguageModelError) -> String {
         switch error {
-        case .guardrailViolation:
-            return "The on-device model declined to route this request."
-        case .exceededContextWindowSize:
-            return "The request is too long for the on-device model."
+        case .contextSizeExceeded:
+            return "That request is too long for the on-device model. Try asking for less at once."
         case .unsupportedLanguageOrLocale:
             return "The on-device model doesn't support that language yet."
+        case .rateLimited:
+            return "The on-device model is busy right now. Try again in a moment."
+        case .timeout:
+            return "The on-device model took too long to answer. Try again."
+        case .guardrailViolation, .refusal:
+            // Unreachable in the hybrid pipeline; kept exhaustive so a
+            // future caller that skips the router still reads sensibly.
+            return "The on-device model declined to handle this request."
         default:
             return error.localizedDescription
         }

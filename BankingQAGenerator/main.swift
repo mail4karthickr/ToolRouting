@@ -114,9 +114,9 @@ let seeds: [ModelSample<BankingAnswer>] = [
     ModelSample(
         prompt: "Find the nearest ATM",
         expected: BankingAnswer(
-            tools: ["get_location", "find_atm"],
+            tools: ["get_location", "find_nearest_atm"],
             answer: "The closest one is the Market Square ATM, 0.1 miles away and open 24 hours.",
-            arguments: ["", "current location"]
+            arguments: ["", "37.7749, -122.4194"]
         )
     ),
     ModelSample(
@@ -158,7 +158,18 @@ let instructions = """
       argument. This is how the real figures get looked up, so it must match
       what the question is actually asking about.
     - When a tool needs another's result, put the source first — "nearest ATM"
-      is ["get_location", "find_atm"].
+      is ["get_location", "find_nearest_atm"], and the argument to
+      find_nearest_atm is the coordinate pair get_location returned. Branches
+      work the same way: ["get_location", "find_nearest_branch"].
+    - find_nearest_atm and find_nearest_branch take coordinates ONLY. A
+      question naming a city, zip code, or address ("ATMs in Chicago", "a
+      branch downtown") has no tool that serves it, so it is ["none"].
+    - branch_hours takes a branch ID, which only find_nearest_branch
+      produces, so EVERY question about a branch's opening hours is
+      ["get_location", "find_nearest_branch", "branch_hours"] — including
+      ones that name the branch, like "what time does the Main St branch
+      close?". A name is not an ID, so naming the branch skips no step.
+      The argument to branch_hours is the ID, e.g. "BR-4417".
     - Set `orderMatters` false when the tools do not depend on each other.
     - Leave `answer` and `toolOutput` EMPTY. You do not know the customer's
       figures. A reference answer is written afterwards from the bank's own

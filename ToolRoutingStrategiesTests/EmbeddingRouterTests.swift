@@ -67,11 +67,16 @@ struct EmbeddingRetrievalEvaluation: Evaluation {
 
     // Expected = the deduplicated tool SET a correct answer needs. For a
     // chain that is every step ("nearest ATM" needs get_location AND
-    // find_atm); for a repeated lookup it is one entry (June and July
+    // find_nearest_atm); for a repeated lookup it is one entry (June and July
     // statements are both served by bank_statement).
     //
-    // Balanced 7/7/7/7 across answer sizes — a quarter each needing one,
-    // two, three and four tools. That is NOT the production distribution,
+    // Balanced 7/7/8/7 across answer sizes — roughly a quarter each
+    // needing one, two, three and four tools. The extra three-tool sample
+    // is "What time does the Main St branch close?", which was a one-tool
+    // query until branch_hours started taking an ID on 2026-08-12; it
+    // moved rather than being dropped, because a named branch that STILL
+    // needs the full chain is the case most likely to be got wrong.
+    // That is NOT the production distribution,
     // where most requests want a single tool. It is deliberately weighted
     // toward the hard end so the mean says something: on a single-tool
     // dataset recall is a near-constant 1.0 and tells you nothing about
@@ -96,8 +101,10 @@ struct EmbeddingRetrievalEvaluation: Evaluation {
         ModelSample(prompt: "What's my credit limit?", expected: EmbeddingShortlist(tools: ["card_limits"])),
         // "number": account vs. routing vs. card.
         ModelSample(prompt: "I need my checking account number for direct deposit", expected: EmbeddingShortlist(tools: ["account_number"])),
-        // Named branch — no location chain needed.
-        ModelSample(prompt: "What time does the Main St branch close?", expected: EmbeddingShortlist(tools: ["branch_hours"])),
+        // Took the branch-hours slot when that sample became a three-tool
+        // chain. "score" vs. "limit" is the same near-miss shape the
+        // bucket is built from.
+        ModelSample(prompt: "What's my credit score?", expected: EmbeddingShortlist(tools: ["credit_score"])),
         // Informal.
         ModelSample(prompt: "bal in savings?", expected: EmbeddingShortlist(tools: ["account_balance"])),
         ModelSample(prompt: "pts balance", expected: EmbeddingShortlist(tools: ["reward_points"])),
@@ -108,7 +115,7 @@ struct EmbeddingRetrievalEvaluation: Evaluation {
         // difference is the LLM's problem, not retrieval's. All the
         // shortlist has to do is hold both.
 
-        ModelSample(prompt: "Find the nearest ATM", expected: EmbeddingShortlist(tools: ["get_location", "find_atm"])),
+        ModelSample(prompt: "Find the nearest ATM", expected: EmbeddingShortlist(tools: ["get_location", "find_nearest_atm"])),
         ModelSample(prompt: "How much is my savings balance in euros?", expected: EmbeddingShortlist(tools: ["account_balance", "convert_currency"])),
         ModelSample(prompt: "Show my balance and this week's transactions", expected: EmbeddingShortlist(tools: ["account_balance", "list_transactions"])),
         ModelSample(prompt: "What's my credit score and do I have any pending payments?", expected: EmbeddingShortlist(tools: ["credit_score", "pending_payments"])),
@@ -117,12 +124,17 @@ struct EmbeddingRetrievalEvaluation: Evaluation {
         // Informal.
         ModelSample(prompt: "starbucks charges this month and whats my balance", expected: EmbeddingShortlist(tools: ["search_transactions", "account_balance"])),
 
-        // MARK: Three tools (7)
+        // MARK: Three tools (8)
 
         // Three-step chain: location → branch → its hours.
-        ModelSample(prompt: "How late is the nearest branch open?", expected: EmbeddingShortlist(tools: ["get_location", "find_branch", "branch_hours"])),
+        ModelSample(prompt: "How late is the nearest branch open?", expected: EmbeddingShortlist(tools: ["get_location", "find_nearest_branch", "branch_hours"])),
+        // The SAME chain even though the branch is named, which is what
+        // makes it worth keeping: branch_hours takes an ID, and naming
+        // the branch does not produce one. Was a one-tool sample until
+        // 2026-08-12.
+        ModelSample(prompt: "What time does the Main St branch close?", expected: EmbeddingShortlist(tools: ["get_location", "find_nearest_branch", "branch_hours"])),
         // Chain plus an unrelated lookup riding along.
-        ModelSample(prompt: "Find the nearest ATM and tell me my daily withdrawal limit", expected: EmbeddingShortlist(tools: ["get_location", "find_atm", "card_limits"])),
+        ModelSample(prompt: "Find the nearest ATM and tell me my daily withdrawal limit", expected: EmbeddingShortlist(tools: ["get_location", "find_nearest_atm", "card_limits"])),
         // One topic area, three tools that share vocabulary — the case
         // where near-miss twins can crowd each other out.
         ModelSample(prompt: "Show my balance, my pending payments and my scheduled payments", expected: EmbeddingShortlist(tools: ["account_balance", "pending_payments", "scheduled_payments"])),
@@ -140,11 +152,11 @@ struct EmbeddingRetrievalEvaluation: Evaluation {
 
         ModelSample(prompt: "Show my balance, my recent transactions, my pending payments and my scheduled payments", expected: EmbeddingShortlist(tools: ["account_balance", "list_transactions", "pending_payments", "scheduled_payments"])),
         ModelSample(prompt: "I'm setting up direct deposit — give me my routing number, my account number, my balance and my last statement", expected: EmbeddingShortlist(tools: ["routing_number", "account_number", "account_balance", "bank_statement"])),
-        ModelSample(prompt: "What's my credit score, my credit limit, my reward points and any open disputes?", expected: EmbeddingShortlist(tools: ["credit_score", "card_limits", "reward_points", "dispute_status"])),
+        ModelSample(prompt: "What's my credit score, my credit limit, my reward points and any open disputes?", expected: EmbeddingShortlist(tools: ["credit_score", "card_limits", "reward_points", "get_dispute_status"])),
         ModelSample(prompt: "What did I spend at Starbucks, what fees did I pay, what interest did I earn and what's my balance?", expected: EmbeddingShortlist(tools: ["search_transactions", "fees_and_charges", "interest_earned", "account_balance"])),
         // Chain (location → branch → hours) plus a fourth lookup.
-        ModelSample(prompt: "Find the nearest branch, tell me its opening hours and show my balance", expected: EmbeddingShortlist(tools: ["get_location", "find_branch", "branch_hours", "account_balance"])),
-        ModelSample(prompt: "Where's the closest ATM, what's my balance and what's my withdrawal limit?", expected: EmbeddingShortlist(tools: ["get_location", "find_atm", "account_balance", "card_limits"])),
+        ModelSample(prompt: "Find the nearest branch, tell me its opening hours and show my balance", expected: EmbeddingShortlist(tools: ["get_location", "find_nearest_branch", "branch_hours", "account_balance"])),
+        ModelSample(prompt: "Where's the closest ATM, what's my balance and what's my withdrawal limit?", expected: EmbeddingShortlist(tools: ["get_location", "find_nearest_atm", "account_balance", "card_limits"])),
         ModelSample(prompt: "Convert my savings balance to euros, then show my recent transactions and anything still pending", expected: EmbeddingShortlist(tools: ["account_balance", "convert_currency", "list_transactions", "pending_payments"]))
     ])
 

@@ -31,7 +31,6 @@ struct AssistantTurn {
         case retrieving
         case selecting
         case answering
-        case rewriting
         case done
 
         /// Shown in the footer while the turn is in flight. Phrased as
@@ -43,7 +42,6 @@ struct AssistantTurn {
             case .retrieving: "Searching tools…"
             case .selecting: "Choosing tools…"
             case .answering: "Running tools…"
-            case .rewriting: "Checking the figures…"
             case .done: ""
             }
         }
@@ -52,8 +50,7 @@ struct AssistantTurn {
     var stage: Stage = .retrieving
 
     /// The answer as far as it has been written. Assigned, never
-    /// appended: partials are cumulative snapshots, and a rewrite after a
-    /// failed verification clears this back to empty on purpose.
+    /// appended: partials are cumulative snapshots.
     var text = ""
 
     /// The finished run — the plan, the trace, everything the pipeline

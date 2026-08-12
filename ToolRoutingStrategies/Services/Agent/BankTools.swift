@@ -1,58 +1,7 @@
 import Foundation
 import FoundationModels
 
-// MARK: - Executable tools (Stage 3)
-//
-// One FoundationModels `Tool` per catalog entry. These are what the
-// AGENT binds to its session — the model calls them itself and sees
-// their output, which is a different thing from the routing stages:
-//
-//   Stage 1/2  decide WHICH tools a request needs (ToolName, a plan)
-//   Stage 3    actually RUN them and answer (these types)
-//
-// `name` and `description` are read straight from ToolCatalog so a tool
-// can never describe itself one way to the router and another way to the
-// agent. Arguments are @Generable, so the framework derives each tool's
-// parameter schema and the model fills it in — the same guided-decoding
-// guarantee the router gets.
-//
-// EVERY ARGUMENTS TYPE HAS A UNIQUE NAME, and that is a requirement, not
-// a style choice. Generation schemas are identified by type NAME within a
-// session's namespace — `GenerationSchema.SchemaError.duplicateType` is
-// the framework's own acknowledgement of this — and the agent's session
-// now binds all twenty tools at once, so every one of these types is
-// resident together.
-//
-// They used to all be called `Arguments`, nested inside their tool, which
-// was harmless while a session held only the two or three routed tools.
-// Under one long-lived session it produced this, on 2026-08-11:
-//
-//     search_transactions → "Failed to parse generated content"
-//
-// Two tools named the same type: `{days: Int}` for list_transactions and
-// `{merchant: String}` for search_transactions. One won the name, so
-// "how much did I spend at Starbucks last month" was generated against
-// `{days}` — the model emitted a perfectly reasonable `{"days": 30}` —
-// and decoding it into `{merchant}` failed. list_transactions kept
-// working, because its schema was the survivor, which is what made the
-// bug look tool-specific rather than structural.
-//
-// So: name a new tool's arguments after what it asks for, never
-// `Arguments`. The shared types below (AccountArgument, CardArgument,
-// NoArguments) are safe precisely because they are ONE type used by
-// several tools rather than several types wearing one name.
-//
-// Every tool here is a read-only GET against BankAPIClient. That is the
-// invariant the whole `none`/cloud split rests on: if a request needs
-// anything that writes, no tool in this file can serve it, and routing
-// sends it off-device instead.
 
-// MARK: - Shared plumbing
-
-/// Looks up a tool's catalog text, so `name`/`description` cannot drift
-/// from what the router was shown. Traps on an unknown name: that means
-/// the catalog and this file disagree, which is a programmer error, not
-/// something to paper over at runtime.
 private func catalogEntry(_ displayName: String) -> ToolDefinition {
     guard let definition = ToolCatalog.byName[displayName] else {
         preconditionFailure("No ToolCatalog entry named '\(displayName)'")
@@ -60,25 +9,21 @@ private func catalogEntry(_ displayName: String) -> ToolDefinition {
     return definition
 }
 
-/// Arguments shared by the account-scoped tools.
+
 @Generable
 struct AccountArgument {
     @Guide(description: "Which account: checking, savings, credit card, or all")
     var account: String
 }
 
-/// Arguments shared by the card-scoped tools.
 @Generable
 struct CardArgument {
-    @Guide(description: "Which card: debit or credit")
-    var card: String
+    @Guide(description: "Which card the question is about. Use `all` when it does not name one — 'what's my card limit?' names no card.")
+    var card: CardType
 }
 
-/// Arguments for tools that take no input.
 @Generable
 struct NoArguments {}
-
-// MARK: - Transactions
 
 struct ListTransactionsTool: Tool {
     let client: any BankAPIClient
@@ -133,8 +78,8 @@ struct SearchTransactionsTool: Tool {
 
 struct DisputeStatusTool: Tool {
     let client: any BankAPIClient
-    var name: String { catalogEntry("dispute_status").displayName }
-    var description: String { catalogEntry("dispute_status").description }
+    var name: String { catalogEntry("get_dispute_status").displayName }
+    var description: String { catalogEntry("get_dispute_status").description }
 
     @Generable
     struct DisputeQuery {
@@ -232,7 +177,7 @@ struct CardNumberTool: Tool {
     typealias Arguments = CardArgument
 
     func call(arguments: CardArgument) async throws -> String {
-        try await client.cardNumber(cardType: arguments.card)
+        try await client.cardNumber(cardType: arguments.card.apiValue)
     }
 }
 
@@ -243,7 +188,7 @@ struct CardLimitsTool: Tool {
     typealias Arguments = CardArgument
 
     func call(arguments: CardArgument) async throws -> String {
-        try await client.cardLimits(cardType: arguments.card)
+        try await client.cardLimits(cardType: arguments.card.apiValue)
     }
 }
 
@@ -281,42 +226,74 @@ struct GetLocationTool: Tool {
     var description: String { catalogEntry("get_location").description }
     typealias Arguments = NoArguments
 
+    /// The coordinates the next call needs. Labelled rather than a bare
+    /// pair, because `find_nearest_atm(latitude:longitude:)` has to copy
+    /// them across and an unlabelled pair invites a transposed one.
     func call(arguments: NoArguments) async throws -> String {
-        try await client.currentLocation()
+        let location = try await client.currentLocation()
+        return "Latitude \(location.latitude), longitude \(location.longitude)"
     }
 }
 
-struct FindBranchTool: Tool {
+/// Branches nearest a coordinate pair.
+///
+/// Same shape as `FindNearestATM`, and for the same reason: the arguments
+/// are `Double`s rather than a place string, so the model physically
+/// cannot call this without calling `get_location` first. While this took
+/// a `location: String` it could satisfy the parameter with the literal
+/// "current location" and skip the chain entirely.
+struct FindNearestBranchTool: Tool {
     let client: any BankAPIClient
-    var name: String { catalogEntry("find_branch").displayName }
-    var description: String { catalogEntry("find_branch").description }
+    var name: String { catalogEntry("find_nearest_branch").displayName }
+    var description: String { catalogEntry("find_nearest_branch").description }
 
     @Generable
-    struct BranchSearch {
-        @Guide(description: "The place: a city, zip code, or address")
-        var location: String
+    struct Coordinates {
+        @Guide(description: "Latitude from get_location, e.g. 37.7749")
+        var latitude: Double
+        @Guide(description: "Longitude from get_location, e.g. -122.4194")
+        var longitude: Double
     }
 
-    func call(arguments: BranchSearch) async throws -> String {
-        let branches = try await client.findBranches(near: arguments.location)
-        return branches.isEmpty ? "No branches near \(arguments.location)." : branches.joined(separator: "\n")
+    func call(arguments: Coordinates) async throws -> String {
+        let branches = try await client.findNearestBranches(
+            latitude: arguments.latitude,
+            longitude: arguments.longitude
+        )
+        return branches.isEmpty
+            ? "No branches near \(arguments.latitude), \(arguments.longitude)."
+            : branches.joined(separator: "\n")
     }
 }
 
-struct FindATMTool: Tool {
+/// ATMs nearest a coordinate pair.
+///
+/// The arguments are `Double`s rather than a place string on purpose.
+/// `get_location` is the only tool that yields coordinates, so the model
+/// physically cannot call this one without calling that one first —
+/// guided decoding will not invent a plausible latitude the way it would
+/// happily fill `location: "current location"`.
+struct FindNearestATM: Tool {
     let client: any BankAPIClient
-    var name: String { catalogEntry("find_atm").displayName }
-    var description: String { catalogEntry("find_atm").description }
+    var name: String { catalogEntry("find_nearest_atm").displayName }
+    var description: String { catalogEntry("find_nearest_atm").description }
 
     @Generable
-    struct ATMSearch {
-        @Guide(description: "The place: a city, zip code, or address")
-        var location: String
+    struct Coordinates {
+        @Guide(description: "Latitude from get_location, e.g. 37.7749")
+        var latitude: Double
+        @Guide(description: "Longitude from get_location, e.g. -122.4194")
+        var longitude: Double
     }
 
-    func call(arguments: ATMSearch) async throws -> String {
-        let atms = try await client.findATMs(near: arguments.location)
-        return atms.isEmpty ? "No ATMs near \(arguments.location)." : atms.joined(separator: "\n")
+    func call(arguments: Coordinates) async throws -> String {
+        let atms = try await client.findNearestATMs(
+            latitude: arguments.latitude,
+            longitude: arguments.longitude
+        )
+        return atms.isEmpty
+            ? "No ATMs near \(arguments.latitude), \(arguments.longitude)."
+            : atms.joined(separator: "\n")
     }
 }
 
@@ -327,12 +304,12 @@ struct BranchHoursTool: Tool {
 
     @Generable
     struct BranchHoursQuery {
-        @Guide(description: "The branch name, e.g. 'Main St'")
-        var branch: String
+        @Guide(description: "The branch ID from find_nearest_branch, e.g. 'BR-4417'. Not the branch name.")
+        var branchID: String
     }
 
     func call(arguments: BranchHoursQuery) async throws -> String {
-        try await client.branchHours(branch: arguments.branch)
+        try await client.branchHours(branchID: arguments.branchID)
     }
 }
 
@@ -399,8 +376,8 @@ enum BankToolRegistry {
         case "bank_statement": BankStatementTool(client: client)
         case "credit_score": CreditScoreTool(client: client)
         case "get_location": GetLocationTool(client: client)
-        case "find_branch": FindBranchTool(client: client)
-        case "find_atm": FindATMTool(client: client)
+        case "find_nearest_branch": FindNearestBranchTool(client: client)
+        case "find_nearest_atm": FindNearestATM(client: client)
         case "fees_and_charges": FeesAndChargesTool(client: client)
         case "account_balance": AccountBalanceTool(client: client)
         case "convert_currency": ConvertCurrencyTool(client: client)
@@ -408,7 +385,7 @@ enum BankToolRegistry {
         case "scheduled_payments": ScheduledPaymentsTool(client: client)
         case "card_limits": CardLimitsTool(client: client)
         case "reward_points": RewardPointsTool(client: client)
-        case "dispute_status": DisputeStatusTool(client: client)
+        case "get_dispute_status": DisputeStatusTool(client: client)
         case "branch_hours": BranchHoursTool(client: client)
         case "interest_earned": InterestEarnedTool(client: client)
         default: nil
