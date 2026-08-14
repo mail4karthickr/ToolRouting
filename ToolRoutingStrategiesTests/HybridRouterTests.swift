@@ -56,13 +56,35 @@ import ClaudeForFoundationModels
 ///
 /// The key is read from the environment rather than bundled, so it never
 /// lands in the repository: set `ANTHROPIC_API_KEY` under Edit Scheme ▸ Test
-/// ▸ Arguments ▸ Environment Variables, or export it before `xcodebuild test`
-/// on a Mac destination. Without it the evaluation is skipped rather than
-/// failing.
+/// ▸ Arguments ▸ Environment Variables, or pass it as
+/// `TEST_RUNNER_ANTHROPIC_API_KEY` to `xcodebuild test` — a test process on
+/// a device does not inherit the shell's environment, so exporting it in a
+/// terminal is not enough.
+///
+/// A MISSING KEY STOPS THE RUN. It used to disable the test through
+/// `.enabled(if:)`, which is the wrong failure: a skipped evaluation
+/// reports no scores, and a suite that reports no scores is green. The
+/// one thing worse than a bad number is a missing one that looks like a
+/// good one — and the scheme carrying this key is now gitignored, so a
+/// fresh clone or a CI machine hits exactly that path.
 enum ClaudeJudge {
     static let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
 
     static var isConfigured: Bool { !apiKey.isEmpty }
+
+    /// The message every unconfigured path prints. One string, so the
+    /// instructions cannot drift between the two places that stop.
+    static let missingKeyMessage = """
+        ANTHROPIC_API_KEY is not set, so the judge cannot score anything and this \
+        evaluation would report nothing at all.
+
+        Set it in Xcode under Edit Scheme ▸ Test ▸ Arguments ▸ Environment Variables, \
+        or pass it to xcodebuild as TEST_RUNNER_ANTHROPIC_API_KEY=… — a test process \
+        running on a device does not inherit your shell's environment.
+
+        The scheme that normally carries it is gitignored, so a fresh clone will not \
+        have one.
+        """
 
     /// THE JUDGE IS NOT WHY RUNS USED TO DIE WITH
     /// `EncodingError.invalidValue: nan`. That was
@@ -83,8 +105,16 @@ enum ClaudeJudge {
     /// seconds against a 60-second between-packets limit, which is not
     /// the margin it looks like on a judge whose reply grows with the
     /// length of the answer it is reading.
+    ///
+    /// STOPS HERE WHEN THE KEY IS MISSING, and this is the early door.
+    /// The evaluators are built before any sample is generated, so a
+    /// `precondition` here ends the run in seconds rather than after
+    /// fourteen minutes of routing whose scores were never going to
+    /// arrive. It cannot fire while some OTHER suite runs: nothing
+    /// touches this property until this evaluation is under way.
     static var model: ClaudeLanguageModel {
-        ClaudeLanguageModel(name: .opus5, auth: .apiKey(apiKey), timeout: 300)
+        precondition(isConfigured, missingKeyMessage)
+        return ClaudeLanguageModel(name: .opus5, auth: .apiKey(apiKey), timeout: 300)
     }
 }
 
@@ -616,12 +646,28 @@ struct HybridRouterTests {
         return variance.squareRoot()
     }
 
+    /// ONLY THE DEVICE CAPABILITY DISABLES THIS TEST, and the judge's key
+    /// deliberately does not.
+    ///
+    /// `SystemLanguageModel.isAvailable` belongs here: a Mac or simulator
+    /// without Apple Intelligence cannot run the pipeline at all, and
+    /// there is nothing to report. A MISSING KEY IS NOT THAT. The
+    /// pipeline runs fine without it; what is missing is the scoring, so
+    /// skipping produces a green suite that measured nothing — the exact
+    /// outcome this whole file exists to prevent. `ClaudeJudge.model`
+    /// stops the run instead, before the first sample.
     @Test(
         "Hybrid Router Answer Evaluations",
-        .enabled(if: SystemLanguageModel.default.isAvailable && ClaudeJudge.isConfigured),
+        .enabled(if: SystemLanguageModel.default.isAvailable),
         .evaluates(evaluation, info: evaluationInfo)
     )
     func evaluateAnswers() async throws {
+        // The second door, and the readable one. `ClaudeJudge.model`
+        // traps earlier and harder; if anything ever reorders the harness
+        // so the evaluators are built lazily, this is what fails the test
+        // with a sentence instead of a stack trace.
+        try #require(ClaudeJudge.isConfigured, "\(ClaudeJudge.missingKeyMessage)")
+
         let result = EvaluationContext.current.result
 
         // Printed first, and loudly, so a partial run can never be read

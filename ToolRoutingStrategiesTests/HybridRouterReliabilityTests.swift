@@ -191,7 +191,11 @@ struct HybridRouterReliabilityTests {
 
     @Test(
         "Repeated trials — pipeline reproducibility and judge spread",
-        .enabled(if: SystemLanguageModel.default.isAvailable && ClaudeJudge.isConfigured),
+        // Device capability only — a missing judge key stops the run
+        // rather than skipping it, the same as HybridRouterTests. See
+        // `ClaudeJudge.missingKeyMessage` for why a skip is the wrong
+        // failure here.
+        .enabled(if: SystemLanguageModel.default.isAvailable),
         .evaluates(evaluation, info: [
             "ModelName": "all-MiniLM-L6-v2 (MLX) + SystemLanguageModel",
             "Strategy": "Hybrid cascade end to end, repeated trials",
