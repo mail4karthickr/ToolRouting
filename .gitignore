@@ -5,6 +5,14 @@
 xcuserdata/
 *.xcuserstate
 
+# Schemes carry the test action's environment, and that is where
+# ANTHROPIC_API_KEY is set for the judge — see ClaudeJudge in
+# HybridRouterTests. A SHARED scheme lives inside the .xcodeproj and is
+# committed by default, so the key went in with it once already and had
+# to be scrubbed out of three commits before they could be pushed.
+# Ignored rather than trusted to be remembered.
+*.xcscheme
+
 # Xcode build artifacts
 build/
 DerivedData/
