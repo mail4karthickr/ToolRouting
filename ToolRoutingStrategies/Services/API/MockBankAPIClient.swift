@@ -33,7 +33,7 @@ struct MockBankAPIClient: BankAPIClient {
         case let type where type.contains("debit"):
             return "4532 7712 0034 9921"
         default:
-            return "Debit: 4532 7712 0034 9921 · Credit: 5412 8834 1290 0044"
+            return "Your debit card number is 4532 7712 0034 9921 and your credit card number is 5412 8834 1290 0044."
         }
     }
 
@@ -48,13 +48,13 @@ struct MockBankAPIClient: BankAPIClient {
     func bankStatement(month: String, accountType: String) async throws -> String {
         switch accountType.lowercased() {
         case let type where type.contains("sav"):
-            return "The \(month) statement for the savings account is ready and available under Documents."
+            return "Your \(month) statement for the savings account is ready and available under Documents."
         case let type where type.contains("credit"):
-            return "The \(month) statement for the credit card account is ready and available under Documents."
+            return "Your \(month) statement for the credit card account is ready and available under Documents."
         case let type where type.contains("check"):
-            return "The \(month) statement for the checking account is ready and available under Documents."
+            return "Your \(month) statement for the checking account is ready and available under Documents."
         default:
-            return "The \(month) statements for the checking, savings and credit card accounts are all ready and available under Documents."
+            return "Your \(month) statements for the checking, savings and credit card accounts are all ready and available under Documents."
         }
     }
 
@@ -69,37 +69,93 @@ struct MockBankAPIClient: BankAPIClient {
         )
     }
 
+    /// PROSE, NOT AN ABBREVIATED ROW. These read
+    /// `Market Square ATM — 0.1 mi, 24 h` until 2026-08-13, and the model
+    /// reproduced them exactly that way: "The closest ATM is Market
+    /// Square ATM — 0.1 mi, 24 h. Also nearby: …", scored Naturalness 3
+    /// for "reproduces the lookup result verbatim, dash-separated list
+    /// and all". A row written the way a person says it is one a reply
+    /// can use unchanged; `0.1 mi, 24 h` is not something anyone says.
+    ///
+    /// Same distances, same hours.
     func findNearestATMs(latitude: Double, longitude: Double) async throws -> [String] {
         [
-            "Market Square ATM — 0.1 mi, 24 h",
-            "Main St Branch ATM — 0.4 mi, 24 h",
-            "QuickCash Mart — 0.6 mi, until 11 pm"
+            "Market Square ATM, 0.1 miles away and open 24 hours",
+            "Main St Branch ATM, 0.4 miles away and open 24 hours",
+            "QuickCash Mart, 0.6 miles away and open until 11 pm"
         ]
     }
 
+    /// Nearest first, each row naming the branch before its ID.
+    ///
+    /// The ID leads nowhere in a reply and everywhere in the chain: it is
+    /// what `branch_hours` takes, so it has to be here, but a row opening
+    /// `BR-4417 ·` puts an internal identifier at the front of the one
+    /// string the model is most likely to echo. In parentheses after the
+    /// name it is still there to be copied into the next call and reads
+    /// as a footnote rather than the subject — the same shape
+    /// `branchHours` answers in.
     func findNearestBranches(latitude: Double, longitude: Double) async throws -> [String] {
-        Self.branches.map { "\($0.id) · \($0.name) — \($0.detail)" }
+        Self.branches.map { "\($0.name) (\($0.id)), \($0.detail)" }
     }
 
+    /// CLAUSES, NOT LABELLED FIELDS — the last row-shaped payloads in the
+    /// catalog, and they read as rows for the same reason
+    /// `list_transactions` did: `Label: $amount` is a table cell, and a
+    /// model handed table cells writes a table back.
+    ///
+    /// MEASURED, 2026-08-13. "What fees did I pay, what interest did I
+    /// earn, and what's my savings balance?" came back as "you paid
+    /// $12.00 for the monthly service fee, $34.00 for the overdraft
+    /// fee, …" — every figure right, Naturalness 3 for reading as an
+    /// enumeration rather than a reply. A clause can be dropped into a
+    /// sentence as it stands; a field has to be rearranged into one, and
+    /// rearranging is where a small model loses a qualifier.
+    ///
+    /// Same fees, same amounts. Only the shape of the string changed.
     func feesAndCharges(accountType: String) async throws -> [String] {
         [
-            "Monthly service fee: $12.00",
-            "Overdraft fee: $34.00",
-            "Domestic wire transfer: $25.00",
-            "Out-of-network ATM: $3.00"
+            "a $12.00 monthly service fee",
+            "a $34.00 overdraft fee",
+            "a $25.00 domestic wire transfer fee",
+            "a $3.00 out-of-network ATM fee"
         ]
     }
 
+    /// SENTENCES, NOT A ROW OF FIELDS, and the figures are untouched.
+    ///
+    /// MEASURED, 2026-08-12. The `all` case returned
+    /// `Checking: $2,340.12 · Savings: $8,120.55 · Credit Card: …` and the
+    /// model pasted it into its reply middots and all — "Your balance is
+    /// Checking: $2,340.12 · Savings: …", scored Naturalness 3 for reading
+    /// "more like a data dump wrapped in a sentence than a person
+    /// speaking". Same finding, and the same fix, as
+    /// `ListTransactionsTool.summary`: a payload shaped like a table gets
+    /// reproduced as a table, and no instruction reaches that reliably
+    /// because the model is doing what the data looks like.
+    ///
+    /// Every amount is the amount it always was. What changed is the
+    /// punctuation between them.
+    /// SECOND PERSON, because the model writes back what it is given.
+    ///
+    /// MEASURED, 2026-08-13, on samples 20–39. These read "The credit
+    /// limit is $10,000" and "Savings is $8,120.55", and the replies came
+    /// back "The credit limit is $10,000, the daily spending limit is
+    /// $5,000…" and "The monthly service fee was $12.00" — three
+    /// Naturalness 3s in one batch, every rationale naming the same
+    /// thing: "impersonal", "reads as a data readout rather than a direct
+    /// answer to the customer". It is the customer's own money; the tool
+    /// should say so, and then the reply says so for free.
     func accountBalance(accountType: String) async throws -> String {
         switch accountType.lowercased() {
         case let type where type.contains("sav"):
-            return "Savings: $8,120.55"
+            return "Your savings balance is $8,120.55."
         case let type where type.contains("credit"):
-            return "Credit Card: $1,204.87 balance of a $10,000 limit"
+            return "Your credit card balance is $1,204.87 of a $10,000 limit."
         case let type where type.contains("check"):
-            return "Checking: $2,340.12"
+            return "Your checking balance is $2,340.12."
         default:
-            return "Checking: $2,340.12 · Savings: $8,120.55 · Credit Card: $1,204.87 of $10,000 limit"
+            return "Your checking balance is $2,340.12, your savings balance is $8,120.55, and your credit card balance is $1,204.87 of a $10,000 limit."
         }
     }
 
@@ -117,18 +173,27 @@ struct MockBankAPIClient: BankAPIClient {
         return "\(amount) is \(converted) \(currency) at today's rate of \(rate) \(currency) per USD."
     }
 
+    /// Clauses, like the fees above.
+    ///
+    /// The PG&E row used to read "PG&E Electricity — $96.40 (scheduled
+    /// for the 1st)" while sitting in the PENDING list, which is the
+    /// wording that has cost sample 51 twice: an item labelled
+    /// "scheduled" inside the pending list, next to a scheduled list
+    /// saying the same word, is an invitation to report one as the other.
+    /// The date is still here — it is real — but "due on the 1st" says it
+    /// without borrowing the other list's name.
     func pendingPayments(accountType: String) async throws -> [String] {
         [
-            "Netflix — $15.49 (processing)",
-            "PG&E Electricity — $96.40 (scheduled for the 1st)"
+            "Netflix for $15.49",
+            "PG&E Electricity for $96.40, due on the 1st"
         ]
     }
 
     func scheduledPayments(accountType: String) async throws -> [String] {
         [
-            "Rent transfer — $1,850 (scheduled for the 1st)",
-            "Credit card autopay — statement balance (scheduled for the 5th)",
-            "Gym membership — $45 (scheduled for the 12th)"
+            "a rent transfer of $1,850 on the 1st",
+            "a credit card autopay for the statement balance on the 5th",
+            "a gym membership of $45 on the 12th"
         ]
     }
 
@@ -144,11 +209,11 @@ struct MockBankAPIClient: BankAPIClient {
     func cardLimits(cardType: String) async throws -> String {
         switch cardType.lowercased() {
         case let type where type.contains("credit"):
-            return "Credit limit: $10,000 · Daily spending limit: $5,000"
+            return "Your credit limit is $10,000 and your daily spending limit is $5,000."
         case let type where type.contains("debit"):
-            return "Daily ATM withdrawal limit: $1,000 · Daily spending limit: $3,000"
+            return "Your daily ATM withdrawal limit is $1,000 and your daily spending limit is $3,000."
         default:
-            return "Credit limit: $10,000 · Daily spending limit: $5,000 · Daily ATM withdrawal limit: $1,000"
+            return "Your credit limit is $10,000, your daily spending limit is $5,000, and your daily ATM withdrawal limit is $1,000."
         }
     }
 
@@ -204,9 +269,9 @@ struct MockBankAPIClient: BankAPIClient {
     /// the finders: a branch NAME is something a model can produce from
     /// the question alone, an ID is not.
     private static let branches: [(id: String, name: String, detail: String)] = [
-        ("BR-4417", "Main St Branch", "0.4 mi, open until 5 pm"),
-        ("BR-2290", "Market Square Branch", "1.2 mi, open until 6 pm"),
-        ("BR-8801", "Airport Branch", "5.6 mi, open until 8 pm")
+        ("BR-4417", "Main St Branch", "0.4 miles away and open until 5 pm"),
+        ("BR-2290", "Market Square Branch", "1.2 miles away and open until 6 pm"),
+        ("BR-8801", "Airport Branch", "5.6 miles away and open until 8 pm")
     ]
 
     /// Conditional on the ARGUMENT, like `disputeStatus` above and for the
@@ -218,11 +283,16 @@ struct MockBankAPIClient: BankAPIClient {
         guard let branch = Self.branches.first(where: { $0.id.uppercased() == wanted }) else {
             return "No branch has ID '\(branchID)'. Call find_nearest_branch first to get one."
         }
-        return "\(branch.name) (\(branch.id)): Mon–Fri 9 am–5 pm, Sat 9 am–1 pm, closed Sunday."
+        // The ID was the ARGUMENT; echoing it back into the one string a
+        // reply is built from is how "Main St Branch (BR-4417)" reached a
+        // customer. The name identifies the branch to a person, and the
+        // caller already knows the ID it passed in.
+        return "The \(branch.name) is open 9 am to 5 pm Monday to Friday, "
+            + "9 am to 1 pm on Saturday, and closed on Sunday."
     }
 
     func interestEarned(accountType: String) async throws -> String {
-        "Savings earned $27.14 interest last month at 4.05% APY."
+        "Your savings earned $27.14 in interest last month at 4.05% APY."
     }
 
     // MARK: Mock data

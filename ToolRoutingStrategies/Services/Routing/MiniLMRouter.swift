@@ -1,17 +1,16 @@
 import Foundation
 
-// MARK: - Sample 2: Embedding-based routing (MLX / MiniLM)
+// MARK: - Stage 1: Embedding retrieval (MLX / MiniLM)
 //
 // Pure semantic retrieval: the query and every tool's texts live in the
-// same embedding space, and routing is a nearest-neighbor lookup. No
-// generation happens at all — so routing is fast and deterministic, but
-// the router can only CLASSIFY: it cannot extract parameters, decompose
-// multi-step requests, or order dependent chains. Those limits are the
-// point of this sample — the eval quantifies them, and the hybrid
-// (retrieval → LLM) sample addresses them.
+// same embedding space, and shortlisting is a nearest-neighbor lookup. No
+// generation happens at all — so it is fast and deterministic, but it can
+// only RANK: it cannot extract parameters, decompose multi-step requests,
+// or order dependent chains. Those are Stage 2's job; `HybridRouter`
+// hands this stage's shortlist to `LLMRouter.select`.
 
 @MainActor
-final class MiniLMRouter: ToolRouter {
+final class MiniLMRouter {
     let strategyName = "MiniLM Embedding Router"
 
     struct Config {
@@ -35,7 +34,6 @@ final class MiniLMRouter: ToolRouter {
         if let indexTask { return indexTask }
         let embedder = embedder
         let specs = ToolCatalog.all.map(\.routableSpec)
-        Log.stage1.info("index task started for \(specs.count) tools, \(specs.flatMap(\.embeddingTexts).count) texts")
         let task = Task.detached(priority: .userInitiated) {
             try await ToolIndexStore.loadOrBuild(specs: specs, embedder: embedder)
         }
@@ -66,17 +64,10 @@ final class MiniLMRouter: ToolRouter {
         // model that could not be warmed will be loaded — and its error
         // reported — by the request that actually needs it.
         //
-        // Logged even so, and at `warning`: a warm that quietly failed is
-        // exactly what a 6-second first Stage 1 looks like from outside.
+        // A warm that fails is not fatal: the weights load again, on
+        // demand, inside the request that needs them.
         warmTask = Task.detached(priority: .userInitiated) {
-            let clock = ContinuousClock()
-            let start = clock.now
-            do {
-                try await embedder.warm()
-                Log.stage1.info("embedder warm ✓ \((clock.now - start).logged)")
-            } catch {
-                Log.stage1.warning("embedder warm failed after \((clock.now - start).logged): \(error)")
-            }
+            try? await embedder.warm()
         }
     }
 
@@ -116,24 +107,17 @@ final class MiniLMRouter: ToolRouter {
     /// scores — only the reporting differs, so the shortlist a caller
     /// gets here is identical to the one `retrieve` would return.
     func rank(_ query: String, topK: Int = 4) async throws -> Retrieval {
-        let clock = ContinuousClock()
-        let start = clock.now
-
         let index: ToolIndex
         do {
             index = try await activeIndexTask().value
         } catch {
             indexTask = nil // e.g. offline during first model download — retry next time
-            Log.stage1.error("index unavailable after \((clock.now - start).logged): \(error)")
             throw error
         }
-        let indexReady = clock.now
 
         guard let queryVector = try await embedder.embed([query]).first else {
-            Log.stage1.error("query embedding cancelled")
             throw CancellationError()
         }
-        let embedded = clock.now
 
         // Score per tool = max dot product over its entries (vectors are
         // normalized, so dot product IS cosine similarity).
@@ -149,49 +133,7 @@ final class MiniLMRouter: ToolRouter {
 
         let shortlist = Array(ranked.filter { $0.score >= config.similarityThreshold }.prefix(topK))
 
-        // The split matters when Stage 1 is slow: waiting on the index
-        // (a first-launch build, or weights still downloading) and
-        // embedding the query are seconds and milliseconds respectively,
-        // and only one of them is fixable by tuning this stage.
-        Log.stage1.debug("""
-            rank: index \((indexReady - start).logged), embed \((embedded - indexReady).logged), \
-            score \((clock.now - embedded).logged) over \(index.entries.count) vectors
-            """)
-        // The FULL ranking, losers included, at debug. This is the recall
-        // ceiling for the request: whatever is missing here cannot be
-        // recovered downstream, and a tool sitting just below the cut is
-        // the difference between a threshold to tune and a description to
-        // rewrite.
-        Log.stage1.debug("""
-            ranked (cut \(config.similarityThreshold), topK \(topK)): \
-            \(ranked.map { "\($0.toolName)=\(String(format: "%.3f", $0.score))" }.joined(separator: " "))
-            """)
-
-        if shortlist.isEmpty {
-            Log.stage1.warning("shortlist EMPTY — best \(ranked.first.map { "\($0.toolName)=\(String(format: "%.3f", $0.score))" } ?? "none")")
-        }
-
         return Retrieval(shortlist: shortlist, ranked: ranked)
-    }
-
-    // MARK: Routing
-
-    /// Article-exact selection (argmax-or-none): similarity search is a
-    /// one-shot CLASSIFIER — top-1 tool, or abstain (empty calls) when
-    /// nothing clears the threshold. What to do with an abstain (e.g.
-    /// forward to the backend) is the caller's policy, not the router's.
-    func route(_ query: String) async throws -> RoutingResult {
-        guard let best = try await retrieve(query, topK: 1).first,
-              let tool = ToolName.withDefaultArguments(named: best.toolName, query: query)
-        else {
-            return RoutingResult(strategyName: strategyName, reasoning: nil, calls: [])
-        }
-
-        return RoutingResult(
-            strategyName: strategyName,
-            reasoning: nil, // embedding routers classify; they cannot generate
-            calls: [RoutedCall(tool: tool, confidence: Double(best.score))]
-        )
     }
 }
 

@@ -67,6 +67,20 @@ import FoundationModels
 final class ToolExecutionAgent {
     private let client: any BankAPIClient
 
+    /// The same permissive-guardrail model Stage 2 selects with, and for
+    /// the same reason — see `LLMRouter.model`, which carries the
+    /// measurement.
+    ///
+    /// BOTH STAGES OR NEITHER. Stage 2 declining to route an account
+    /// number and Stage 3 declining to write one are the same guardrail
+    /// reading the same digits; relaxing only the first would move the
+    /// silence one stage later and cost the identical Completeness 1,
+    /// with the tool output already fetched to make it sting.
+    private static let model = SystemLanguageModel(
+        useCase: .general,
+        guardrails: .permissiveContentTransformations
+    )
+
     /// How many sessions this agent has built — one per request, by
     /// design. Kept because it is the counter that would catch someone
     /// making this persistent again without reading why it isn't.
@@ -168,17 +182,13 @@ final class ToolExecutionAgent {
             toolDefinitions: bound.map { Transcript.ToolDefinition(tool: $0) }
         )
         let session = LanguageModelSession(
+            model: Self.model,
             tools: bound,
             transcript: Transcript(entries: [.instructions(instructions)] + history)
         )
-        sessionsBuilt += 1
         // BOUND is the list the model can dispatch to; anything else it
-        // names has nowhere to go. Logged with the carried history size
-        // because the two together are this session's whole context.
-        Log.stage3.debug("""
-            session #\(sessionsBuilt) bound \(bound.map(\.name)), \
-            \(history.count) history entr\(history.count == 1 ? "y" : "ies")
-            """)
+        // names has nowhere to go.
+        sessionsBuilt += 1
         return session
     }
 
@@ -190,7 +200,7 @@ final class ToolExecutionAgent {
     /// the routed tools and the tools are the routed tools, and neither
     /// is known until Stage 2 has run.
     func prewarm() {
-        LanguageModelSession().prewarm()
+        LanguageModelSession(model: Self.model).prewarm()
     }
 
     /// Keeps what the user and the assistant SAID, discards how it was
@@ -198,29 +208,50 @@ final class ToolExecutionAgent {
     ///
     /// Called after a turn succeeds, from the session that produced the
     /// answer.
-    private func remember(_ transcript: Transcript) {
-        history += transcript.filter { entry in
+    ///
+    /// `discarding` is the repair prompt, when one was sent. THE REPAIR IS
+    /// NOT PART OF THE CONVERSATION: the customer asked one question and
+    /// received one answer, and carrying "the tool you have not called yet
+    /// is pending_payments" forward as though they had typed it would put
+    /// the agent's own plumbing into the context of every later turn — and
+    /// leave the superseded half-answer sitting there as the reply to it.
+    /// Both go; what remains is the question and the answer that was
+    /// finally given.
+    private func remember(_ transcript: Transcript, discarding repairPrompt: String? = nil) {
+        var kept: [Transcript.Entry] = []
+        for entry in transcript {
             switch entry {
-            case .prompt, .response:
-                return true
+            case .prompt(let prompt):
+                let text = prompt.segments
+                    .compactMap { if case .text(let text) = $0 { text.content } else { nil } }
+                    .joined(separator: " ")
+                guard text != repairPrompt else {
+                    // Drop the answer this replaced along with it: it is
+                    // the incomplete one, superseded by what comes next.
+                    if case .response = kept.last { kept.removeLast() }
+                    continue
+                }
+                kept.append(entry)
+            case .response:
+                kept.append(entry)
             case .instructions, .toolCalls, .toolOutput:
                 // Instructions are rebuilt per turn from that turn's plan.
                 // Calls and outputs are dropped on purpose — see `history`.
-                return false
+                continue
             default:
                 // `.reasoning` and anything the framework adds later. If a
                 // future entry kind is worth carrying, decide that
                 // deliberately rather than inheriting it here.
-                return false
+                continue
             }
         }
+        history += kept
         if history.count > Self.historyEntryLimit {
             let dropped = history.count - Self.historyEntryLimit
             history.removeFirst(dropped)
             // Where "it forgot what I just asked" comes from. The cap is
             // deliberate, but the turn it starts biting on is worth
             // knowing when a follow-up question stops resolving.
-            Log.stage3.info("history trimmed by \(dropped) to \(Self.historyEntryLimit) entries")
         }
     }
 
@@ -301,7 +332,6 @@ final class ToolExecutionAgent {
         // Better to surface that than to hand the model an empty toolbox
         // and let it invent an answer.
         guard !tools.isEmpty else {
-            Log.stage3.error("no executable tool for \(names) — nothing to bind")
             throw AgentError.noExecutableTools(names)
         }
 
@@ -309,27 +339,57 @@ final class ToolExecutionAgent {
         if runnable.count != names.count {
             // A routed name with no registry entry: the catalog and the
             // registry have drifted apart.
-            Log.stage3.error("unimplemented tool(s) dropped from the plan: \(Set(names).subtracting(runnable).sorted())")
         }
 
         let session = makeSession(for: runnable, tools: tools)
-        let answer = try await respond(in: session, to: query, onUpdate: onUpdate)
+        var answer = try await respond(in: session, to: query, onUpdate: onUpdate)
 
-        // Every call the model actually made, with the arguments it chose
-        // and what came back. This is where a wrong answer is usually
-        // explained: the right tool called with the wrong account, or a
-        // chain that ran out of order and passed a placeholder along.
-        for invocation in answer.invocations {
-            Log.stage3.info("""
-                ↳ \(invocation.toolName)(\(invocation.arguments ?? "")) \
-                → \(invocation.output?.loggable() ?? "NO OUTPUT")
-                """)
-        }
-        if answer.text.isEmpty {
-            Log.stage3.error("empty reply — planned \(runnable), called \(answer.executedTools)")
+        // ROUTING SAID THESE TOOLS; ONE OF THEM NEVER RAN.
+        //
+        // The instructions say "call all of them" and the plan is the
+        // whole toolbox, so a routed tool missing from the transcript is
+        // a defect rather than a judgment call — that is this file's own
+        // rule, and until now it was only ever LOGGED. The eval is where
+        // the cost showed up: "Show my Netflix charges, my pending
+        // payments, and my scheduled payments" (2026-08-12) called
+        // scheduled_payments FOUR times, never called pending_payments,
+        // and answered two of three parts. Completeness 2, from a plan
+        // that was correct and a toolbox that held the missing tool the
+        // whole time.
+        //
+        // So the check that already knew becomes the fix: name what was
+        // skipped and ask again, ONCE. The second turn runs on the same
+        // session, so the first turn's calls and their output are still
+        // in context — this adds the missing figures rather than
+        // restarting, and the tools it can reach are the same bound list.
+        //
+        // ONE RETRY, not a loop. Two rounds bound the latency a wrong
+        // turn can cost, and a model that ignores a request this direct
+        // twice is not going to be talked round by a third — better to
+        // answer with what there is and let the eval record the gap.
+        var repairPrompt: String?
+        let missing = runnable.filter { !answer.executedTools.contains($0) }
+        if !missing.isEmpty {
+            let prompt = Self.retryPrompt(for: query, missing: missing)
+            repairPrompt = prompt
+            let repaired = try await respond(
+                in: session,
+                to: prompt,
+                onUpdate: onUpdate,
+                // The user-visible latency of this turn was set by the
+                // first generation; the retry's own first token says
+                // nothing about how long the customer waited for a word
+                // to appear, and overwriting it would make a repaired
+                // turn look faster than the one it repaired.
+                timeToFirstToken: answer.timeToFirstToken
+            )
+            // A repair that comes back with nothing to say does not get to
+            // delete a real answer. The first reply was incomplete; empty
+            // is worse, and Completeness scores it that way.
+            answer = repaired.text.isEmpty ? answer : repaired
         }
 
-        remember(session.transcript)
+        remember(session.transcript, discarding: repairPrompt)
         return answer
     }
 
@@ -347,7 +407,8 @@ final class ToolExecutionAgent {
     private func respond(
         in session: LanguageModelSession,
         to query: String,
-        onUpdate: (RoutingUpdate) -> Void
+        onUpdate: (RoutingUpdate) -> Void,
+        timeToFirstToken carriedTimeToFirstToken: Duration? = nil
     ) async throws -> Answer {
         let clock = ContinuousClock()
         let start = clock.now
@@ -383,21 +444,45 @@ final class ToolExecutionAgent {
                 // model cannot write a grounded figure until the calls
                 // have come back. A long ttft with fast tools is a slow
                 // prefill; a long one with slow tools is the API.
-                Log.stage3.debug("first token at \((clock.now - start).logged)")
             }
             text = partial
             onUpdate(.answerPartial(partial))
         }
 
+        // THE WHOLE TRANSCRIPT, not this generation's share of it. On a
+        // repaired turn the first pass's calls are in here too, and they
+        // are as much a part of what produced the answer as the second
+        // pass's — the reply the customer reads rests on both, and the
+        // eval grades faithfulness against exactly this list.
         let invocations = Self.invocations(in: session.transcript)
         return Answer(
             text: text,
             executedTools: invocations.map(\.toolName),
             invocations: invocations,
             transcript: session.transcript,
-            timeToFirstToken: timeToFirstToken,
+            timeToFirstToken: carriedTimeToFirstToken ?? timeToFirstToken,
             promptTokens: promptTokens
         )
+    }
+
+    /// What to say when a routed tool never ran.
+    ///
+    /// NAMES THE TOOL AND RESTATES THE QUESTION. Naming it is what makes
+    /// this different from asking again — the model has already answered
+    /// once and believes it is finished, so "you did not answer fully"
+    /// invites a rewording of the same reply. The original question comes
+    /// with it because the answer has to cover ALL of it, not only the
+    /// part the missing tool serves: a second reply about pending
+    /// payments alone would trade one incomplete answer for another.
+    private static func retryPrompt(for query: String, missing: [String]) -> String {
+        let names = ToolOutput.list(missing)
+        let verb = missing.count == 1 ? "tool you have not called yet is" : "tools you have not called yet are"
+        return """
+            The \(verb) \(names). Call \(missing.count == 1 ? "it" : "them") now, then reply \
+            ONCE with the complete answer to the original question — "\(query)" — covering \
+            every part of it, including the parts you have already answered. Use the figures \
+            the tools returned and nothing else.
+            """
     }
 
     // MARK: Instructions
@@ -459,6 +544,11 @@ final class ToolExecutionAgent {
         guess a balance, a number, or a date, and never mention the tools, \
         the app, or that you called anything.
 
+        Internal reference codes are part of that: a branch ID like \
+        BR-4417 is how one tool talks to another, not something a \
+        customer asked for. Use it to make the next call, then leave it \
+        out — say "the Main St Branch", never "Main St Branch (BR-4417)".
+
         The tools were retrieved for this question already: \
         \(names.joined(separator: ", ")). Call all of them. When one needs \
         another's result, call that one first and pass its answer along. \
@@ -466,6 +556,15 @@ final class ToolExecutionAgent {
         REPLY rather than working it in — routing errs on the side of \
         offering one tool too many. Skipping the call is not the fix; \
         omitting the result from the answer is.
+
+        THAT APPLIES TO PART OF A RESULT TOO. When the question names ONE \
+        thing and the tool returns several, answer with the one and leave \
+        the rest out: "my credit card number" gets the credit card, not \
+        the debit card that came back with it, and "when does my rent \
+        payment go out" gets the rent, not the gym membership sitting \
+        beside it in the schedule. When the question names nothing in \
+        particular — "what fees did I pay", "my card limits" — it is \
+        asking for all of them, and all of them is the answer.
 
         Call each tool ONCE. When it takes a parameter that covers \
         everything asked for — "all" rather than one account at a time — \
@@ -476,7 +575,13 @@ final class ToolExecutionAgent {
 
         Never work out a total, a difference, or a percentage, and never \
         report a figure you arrived at yourself — only figures a tool \
-        returned. If the question compares two amounts, whether one \
+        returned. Never write "totalling", "in total", "altogether" or \
+        "that comes to" about figures you added up yourself: MEASURED, a \
+        reply summarised three scheduled payments as "totaling \
+        $2,345.89", a number no tool returned and one that cannot exist, \
+        because one of the three is a statement balance rather than an \
+        amount. List the figures instead — that is what the customer \
+        asked for. If the question compares two amounts, whether one \
         covers another, give BOTH figures and say which is larger rather \
         than reporting what is left over. A number you calculated is \
         indistinguishable to the reader from one the bank returned, and \
@@ -487,6 +592,27 @@ final class ToolExecutionAgent {
         question has several parts, because every part still needs its \
         own figures. If a tool comes back empty, say so plainly rather \
         than filling the gap.
+
+        Write ONE PARAGRAPH of ordinary, COMPLETE sentences. Every clause \
+        needs its verb: "the charge was $82.19 and your balance is \
+        $1,204.87", never "The charge at Amazon $82.19 and the credit \
+        card balance $1,204.87" — brevity is not worth a sentence a \
+        person would not say. No bullet points, no headings, no blank \
+        lines, no rows separated by dashes or dots, and do not carry a \
+        tool's punctuation across into your reply. The figures are the \
+        tool's; the sentence is yours.
+
+        Talk TO the customer about THEIR money, in the present tense: \
+        "your monthly service fee is $12.00", not "the monthly service \
+        fee was $12.00". MEASURED: three replies in one batch were marked \
+        down for reading as a data readout, and the difference every time \
+        was one word — "the" where "your" belonged.
+
+        When the answer differs by case — weekdays against Saturday, one \
+        account against another — give EACH case, not just the first one \
+        you read. "Open until 5 pm on weekdays" silently drops the \
+        Saturday hours the same tool returned, and a customer planning a \
+        Saturday visit is the one asking.
 
         NEVER ANNOUNCE WHAT YOU ARE ABOUT TO SHOW. "Here are your recent \
         transactions, pending payments, and scheduled payments." is not \

@@ -224,9 +224,28 @@ enum ToolCatalog {
             description: "Answer any currency conversion question: how much an amount, balance, or price is worth in another currency, at the current exchange rate.",
             notFor: "sending money abroad or exchanging cash (actions); the conversion QUESTION itself is always served by this tool. Also NOT for a question that merely mentions an amount without naming another currency — \"do I have enough to cover $5,000\" is a balance question, not a conversion",
             argumentHint: "a concrete amount like '$500' and the target currency code like 'EUR'; when converting an account balance, call account_balance FIRST and pass 'from account_balance' as the amount",
+            // "How much is my balance in euros" earns its place in the
+            // INDEX rather than the prompt — the entry only ever shows
+            // two examples, and every text here is a vector Stage 1 can
+            // match against.
+            //
+            // MEASURED, 2026-08-13. "How much is my checking balance in
+            // euros, and what's my credit score?" did not retrieve this
+            // tool at all: the shortlist came back account_balance 0.83,
+            // fees_and_charges 0.81, credit_score 0.81, bank_statement
+            // 0.80, card_limits 0.77, and convert_currency was not in it.
+            // Stage 2 cannot select what Stage 1 never showed it — the
+            // output grammar is built from the shortlist — so the reply
+            // gave the balance in dollars and scored Completeness 2, the
+            // only 2 in that batch. The existing examples all name a
+            // literal amount ("$500 in euros") or the verb ("Convert my
+            // savings balance"); none of them ask for a BALANCE in
+            // another currency without saying "convert", which is the
+            // most natural way to ask.
             exampleQueries: [
                 "How much is $500 in euros?", "Convert my savings balance to GBP", "What's 200 dollars in yen?",
-                "500 usd in eur", "200 dollars to yen"
+                "500 usd in eur", "200 dollars to yen",
+                "How much is my balance in euros?", "what's my checking balance in GBP"
             ],
             icon: "arrow.left.arrow.right.circle",
             color: .mint

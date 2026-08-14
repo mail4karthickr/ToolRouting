@@ -43,6 +43,7 @@ Anthropic API key (see ClaudeJudge). Device or Mac only.
 import Evaluations
 import Foundation
 import FoundationModels
+import TabularData
 import Testing
 import ClaudeForFoundationModels
 @testable import ToolRoutingStrategies
@@ -60,12 +61,30 @@ import ClaudeForFoundationModels
 /// failing.
 enum ClaudeJudge {
     static let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
-//    static let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] ?? ""
 
     static var isConfigured: Bool { !apiKey.isEmpty }
 
+    /// THE JUDGE IS NOT WHY RUNS USED TO DIE WITH
+    /// `EncodingError.invalidValue: nan`. That was
+    /// `computeStandardDeviation` over a dimension with no spread, and
+    /// the account is in `aggregateMetrics`. It is recorded here too
+    /// because this is where three days of suspicion landed, and the
+    /// next person will start here as well.
+    ///
+    /// WHAT THE JUDGE DOES DO, measured 2026-08-13: asked the same shape
+    /// of question twelve times, it failed none of them, was never slow
+    /// (6–13 seconds against a 60-second timeout) — and ONCE came back
+    /// scoring two of its three dimensions ZERO, off a 1–4 scale. That is
+    /// a real defect, roughly one call in twelve, and it is handled by
+    /// `ValidatedModelJudge` rather than by hoping. It was never the
+    /// crash: a 0 is a finite number, and a mean can hold it.
+    ///
+    /// The raised timeout stays. The probe's slowest healthy call was 13
+    /// seconds against a 60-second between-packets limit, which is not
+    /// the margin it looks like on a judge whose reply grows with the
+    /// length of the answer it is reading.
     static var model: ClaudeLanguageModel {
-        ClaudeLanguageModel(name: .opus5, auth: .apiKey(apiKey))
+        ClaudeLanguageModel(name: .opus5, auth: .apiKey(apiKey), timeout: 300)
     }
 }
 
@@ -316,7 +335,20 @@ struct HybridAnswerEvaluation: Evaluation {
         ])
     )
 
+    /// The judge, wrapped in the one thing it cannot do for itself:
+    /// refuse to answer off its own scale. See `ValidatedModelJudge` —
+    /// the judging is entirely `ModelJudgeEvaluator`'s, and the wrapper
+    /// only decides what happens when a 0 comes back where a 1–4 was
+    /// asked for. Without it, that one score is carried as NaN and the
+    /// whole run fails to encode, losing every other sample's result.
     var evaluators: Evaluators {
+        ValidatedModelJudge(
+            judge: modelJudge,
+            dimensions: [faithfulness, completeness, naturalness]
+        )
+    }
+
+    private var modelJudge: ModelJudgeEvaluator<ModelSample<BankingAnswer>> {
         ModelJudgeEvaluator(
             judge: ClaudeJudge.model,
             dimensions: [faithfulness, completeness, naturalness],
@@ -335,6 +367,21 @@ struct HybridAnswerEvaluation: Evaluation {
                     served, a non-reply is a total failure of Completeness. The \
                     reference below tells you which of the two you are looking at; do \
                     not infer it from the silence itself.
+
+                    THE REPLY IS WHAT FOLLOWS "Assistant reply:", and that label is OUR \
+                    framing — it is not something the customer saw, and it is not part of \
+                    what you are scoring. MEASURED: two replies in two runs were marked \
+                    down on Naturalness for "a label a customer would not expect to see" \
+                    and "a scaffolding artifact", both times quoting this line rather than \
+                    anything the assistant wrote. Score the words after it and nothing else.
+
+                    EVERY DIMENSION GETS ONE OF 1, 2, 3 OR 4. There is no 0, no N/A and \
+                    no blank: a reply you find nothing to say about is a 4, and a reply \
+                    with no text in it is still scored on all three — see the paragraph \
+                    above for which way. This is not a formatting preference. A score \
+                    outside the scale has no place on it, and the run cannot record it: \
+                    the whole report fails to encode, and every other sample's score is \
+                    lost with it.
                     """,
                 // Deliberately states only what happened, with no verdict
                 // attached. The previous wording told the judge a non-reply
@@ -370,16 +417,45 @@ struct HybridAnswerEvaluation: Evaluation {
         )
     }
 
+    /// Mean for the headline, minimum because one bad answer matters more
+    /// than a good average.
+    ///
+    /// NO STANDARD DEVIATION HERE, AND IT IS NOT AN OVERSIGHT. It was in
+    /// this loop until 2026-08-13, and it is why five runs died before
+    /// writing a single score:
+    ///
+    ///     EncodingError.invalidValue: nan (Double). Path: value.
+    ///
+    /// MEASURED, with three fixed samples and one aggregate at a time:
+    ///
+    ///     mean,     identical values (4,4,4)   4.0
+    ///     minimum,  identical values (4,4,4)   4.0
+    ///     std dev,  VARYING   values (4,3,2)   1.0
+    ///     std dev,  identical values (4,4,4)   NaN  ← crashes the run
+    ///     variance, identical values (4,4,4)   NaN  ← crashes the run
+    ///
+    /// `computeStandardDeviation` returns NaN when a dimension has NO
+    /// SPREAD — every sample scoring the same — and JSON cannot hold a
+    /// NaN, so the whole `.xcevalresult` fails to encode and every
+    /// sample's score is lost. It happens inside the harness before
+    /// `evaluateAnswers` runs, which is why the error names nothing and
+    /// no assertion here could catch it.
+    ///
+    /// THE FAILURE GOT MORE FREQUENT AS THE ROUTER GOT BETTER, which is
+    /// what made it look like flakiness for so long: a dimension only
+    /// loses its spread once every answer scores the same, so the runs it
+    /// killed were the good ones. Three earlier explanations — a judge
+    /// timeout, a judge scoring 0, a sample with no score — were each
+    /// tested and each wrong; the control that scored every sample 4
+    /// crashed just as hard.
+    ///
+    /// The σ itself is not lost. It is computed from the per-sample table
+    /// in `evaluateAnswers`, where a dimension with no spread is simply
+    /// zero, which is the answer the aggregate should have given.
     func aggregateMetrics(using aggregator: inout MetricsAggregator) {
-        // All three judge dimensions get the same treatment: mean for the
-        // headline, minimum because one bad answer matters more than a
-        // good average, and standard deviation because these are model
-        // scores with real variance — read the σ before comparing two
-        // runs, per HybridRouterReliabilityTests.
         for dimension in [faithfulness, completeness, naturalness] {
             aggregator.computeMean(of: dimension.metric)
             aggregator.computeMinimum(of: dimension.metric)
-            aggregator.computeStandardDeviation(of: dimension.metric)
         }
     }
 }
@@ -388,35 +464,30 @@ struct HybridAnswerEvaluation: Evaluation {
 
 @Suite("Hybrid Router Evaluations")
 struct HybridRouterTests {
-    /// TEMPORARY — which bundled dataset this eval runs.
+    /// Which bundled dataset this eval runs.
     ///
-    /// `failing_banking_qa` holds whatever is currently failing, lifted
-    /// from `synthetic_banking_qa` so its expectations can never drift
-    /// from the source. It exists to make the fix loop short, and it gets
-    /// re-cut as samples are fixed:
+    /// BACK ON THE REAL ONE, 2026-08-13. `failing_banking_qa` — a subset
+    /// lifted from this file so its expectations could never drift from
+    /// the source — served its purpose and is finished with:
     ///
     ///   20 samples  the 2026-08-12 08:30 failures — synthetic indices
     ///               3, 7, 11, 14, 19, 21, 23, 26, 27, 29, 31, 33, 35,
-    ///               39, 47, 49, 50, 51, 58, 59. About 6 minutes.
+    ///               39, 47, 49, 50, 51, 58, 59.
     ///    9 samples  re-cut after run 7 — 3, 26, 27, 29, 31, 39, 47, 51,
-    ///               59. About 3 minutes.
+    ///               59. Finished 2026-08-13 at F 3.85, C 3.89, N 3.67
+    ///               across three runs, minimum 3 on every dimension.
     ///
-    /// EVERY RE-CUT NARROWS WHAT IS WATCHED. The 11 dropped in the second
-    /// cut no longer run, so a regression in one of them is invisible
-    /// here — the same trade as running 20 of 60, one level deeper. Two of
-    /// today's changes had to be reverted for breaking samples that WERE
-    /// still in the set; a narrower set would have hidden them. Re-cut to
-    /// move faster, then run the full dataset before believing anything.
+    /// EVERY RE-CUT NARROWED WHAT WAS WATCHED, which is the reason to
+    /// come back here rather than re-cut again: the 11 samples dropped in
+    /// the second cut stopped running, so a regression in one of them was
+    /// invisible for a day. Two changes had to be reverted for breaking
+    /// samples that were still in the set; a narrower set would have
+    /// hidden them.
     ///
-    /// NOTHING MEASURED ON IT IS A ROUTER SCORE. It is the failures only,
-    /// so its mean is bounded far below the real one and cannot be
-    /// compared to any run of the full dataset — and because it is a
-    /// filtered subset it is no longer interleaved by answer size, so
-    /// `sampleLimit` prefixes of it are not proportional either. The
-    /// number to report is a full `synthetic_banking_qa` pass.
-    ///
-    /// Set back to "synthetic_banking_qa" once these are fixed.
-    static let datasetName = "failing_banking_qa"
+    /// The file is kept, not deleted. It is the fastest loop there is
+    /// when a specific defect is being chased, and re-cutting it is a
+    /// copy of the failing entries out of this dataset.
+    static let datasetName = "synthetic_banking_qa"
 
     /// URL to the dataset bundled with the test target.
     static let samplesURL: URL = {
@@ -429,30 +500,34 @@ struct HybridRouterTests {
         return url
     }()
 
-    /// TEMPORARY — how many samples to run, counting from the top of the
-    /// file. A full pass runs 60 requests through retrieval, selection,
-    /// the agent AND a Claude judge call, so it is far too slow to sit in
-    /// an edit-run loop. Set to `nil` before reading any number as real.
+    /// TEMPORARY — which slice of the dataset to run, as a half-open
+    /// range of indices. `nil` runs all 60.
     ///
-    /// The slice is a PREFIX, which is only informative because the
-    /// dataset is INTERLEAVED: `synthetic_banking_qa.json` round-robins
-    /// none → 1-call → 2-call → 3-call, so any prefix is roughly
-    /// proportional and the first 10 cover 3 escalations, 3 single
-    /// lookups, 2 chains and 2 three-call plans. It was previously
-    /// grouped by bucket, which made the first 15 samples all escalation
-    /// and a truncated run actively misleading — keep the interleave if
-    /// you regenerate the file.
+    /// A full pass puts 60 requests through retrieval, selection, the
+    /// agent AND a Claude judge call — roughly 20 minutes — which is too
+    /// slow to sit in an edit-run loop. A batch of 20 is about 7, which
+    /// is not.
     ///
-    /// A prefix is still not a small version of the full run: 10 samples
-    /// puts the 95% interval at roughly ±0.3, so it catches a pipeline
-    /// that is broken, not a prompt that is 10% worse.
+    /// A RANGE RATHER THAN A PREFIX, since 2026-08-13. `sampleLimit: Int?`
+    /// could only ever take from the top, so working through the dataset a
+    /// batch at a time meant re-running batch one every time to reach
+    /// batch two. The indices printed by a failing run are indices into
+    /// THIS file, so a range is also what you already have when you want
+    /// to re-run what failed.
     ///
-    /// The interleave argument holds for `synthetic_banking_qa` ONLY.
-    /// While `datasetName` is the failing subset there is no bucket
-    /// rotation left to preserve, so keep this at `nil` — a prefix of
-    /// that file is an arbitrary handful of defects, not a sample of
-    /// anything.
-    static let sampleLimit: Int? = nil
+    /// ANY SLICE IS ROUGHLY PROPORTIONAL, because the dataset is
+    /// INTERLEAVED: `synthetic_banking_qa.json` round-robins none →
+    /// 1-call → 2-call → 3-call, so twenty consecutive samples carry
+    /// about five of each. It was once grouped by bucket, which made the
+    /// first fifteen all escalation and a truncated run actively
+    /// misleading — keep the interleave if you regenerate the file.
+    ///
+    /// A BATCH IS STILL NOT A SMALL VERSION OF THE FULL RUN. Twenty
+    /// samples put the 95% interval at about ±0.22 and nine put it at
+    /// ±0.33, against differences worth chasing of about 0.1 — enough to
+    /// catch a pipeline that is broken, not a prompt that is 10% worse.
+    /// Set this to `nil` before reporting a number as the router's.
+    static let batch: Range<Int>? = nil
 
     /// Floor for every judge dimension's mean, on the 1–4 scale. See the
     /// expectation in `evaluateAnswers` for why it is set where it is.
@@ -465,24 +540,18 @@ struct HybridRouterTests {
     /// unchanged build can land near 3.48, and this floor will sometimes
     /// fail on code that did not get worse.
     ///
-    /// WHEN IT FAILS, RAISE `sampleLimit` BEFORE LOWERING THIS. The
-    /// interval narrows with √n: at 60 samples it is about ±0.18, which
-    /// puts 3.5 clear of the noise. Lowering the floor to make a red
-    /// suite green is how the 3.0 version stopped meaning anything —
-    /// it sat so far below the measured range that it could not fire.
+    /// WHEN IT FAILS, WIDEN `batch` BEFORE LOWERING THIS. The interval
+    /// narrows with √n: at 60 samples it is about ±0.18, which puts 3.5
+    /// clear of the noise. Lowering the floor to make a red suite green
+    /// is how the 3.0 version stopped meaning anything — it sat so far
+    /// below the measured range that it could not fire.
     ///
-    /// One number for three dimensions, so it is set by the least stable:
-    /// Completeness, which tracks routing errors and has ranged 3.00–3.80
-    /// across today's runs. Naturalness has never left 3.70–3.90 and
-    /// could carry a tighter bar of its own if this ever becomes worth
-    /// splitting.
-    ///
-    /// DELIBERATELY UNCHANGED while `datasetName` is the failing subset,
-    /// where it stops being a regression gate and becomes a completion
-    /// one: every sample in that file is a known defect, so the suite
-    /// goes green exactly when they are fixed. Expect red until then, and
-    /// do not lower it to get green — that is the failure mode this
-    /// comment's 3.0 story is already about.
+    /// One number for three dimensions, so it is set by the least stable.
+    /// That WAS Completeness, which tracks routing errors; on 2026-08-13
+    /// it is Naturalness, which is the only dimension that has not
+    /// cleared 3.8 on the hard subset while Completeness sat at 3.889 in
+    /// three consecutive runs. Splitting the floor per dimension is worth
+    /// doing once a full pass reports each one's σ.
     static let judgeFloor = 3.5
 
     static let samples: [ModelSample<BankingAnswer>] = {
@@ -495,8 +564,14 @@ struct HybridRouterTests {
         } catch {
             fatalError("Could not decode \(datasetName).json: \(error)")
         }
-        guard let sampleLimit else { return all }
-        return Array(all.prefix(sampleLimit))
+        guard let batch else { return all }
+        // Clamped rather than trusted: a range past the end of the file
+        // is a typo in one line of this suite, and crashing the whole
+        // test target over it — as `Array(all[batch])` would — hides the
+        // typo behind a stack trace. Running fewer samples says what
+        // happened, and the batch is printed with the result.
+        let slice = batch.clamped(to: all.indices)
+        return Array(all[slice])
     }()
 
     static let evaluation = HybridAnswerEvaluation(
@@ -513,6 +588,34 @@ struct HybridRouterTests {
         "Feature": "End-to-end banking answers (\(datasetName), \(samples.count) samples)"
     ]
 
+    /// One dimension's standard deviation, computed here rather than
+    /// asked of `MetricsAggregator`.
+    ///
+    /// The aggregate version returns NaN for a dimension whose samples
+    /// all scored the same, and a NaN takes the entire report down with
+    /// it — see `aggregateMetrics`, which carries the measurement. This
+    /// reads the per-sample scores off `result.detailed`, where each
+    /// dimension is a column of `Metric`, and a run with no spread is
+    /// simply zero.
+    ///
+    /// Sample standard deviation, dividing by n − 1, which is the
+    /// convention the aggregate used when it worked: it reported 1.0 for
+    /// scores of 4, 3 and 2, where the population figure is 0.816.
+    static func spread(of dimension: ScoreDimension, in result: EvaluationResult) -> Double {
+        guard let column = result.detailed.columns
+            .first(where: { $0.name == dimension.name })?
+            .assumingType(Metric.self)
+        else { return 0 }
+
+        let values = column.compactMap { $0?.doubleValue }
+        guard values.count > 1 else { return 0 }
+        let mean = values.reduce(0, +) / Double(values.count)
+        let variance = values
+            .map { ($0 - mean) * ($0 - mean) }
+            .reduce(0, +) / Double(values.count - 1)
+        return variance.squareRoot()
+    }
+
     @Test(
         "Hybrid Router Answer Evaluations",
         .enabled(if: SystemLanguageModel.default.isAvailable && ClaudeJudge.isConfigured),
@@ -521,11 +624,15 @@ struct HybridRouterTests {
     func evaluateAnswers() async throws {
         let result = EvaluationContext.current.result
 
-        // Printed first, and loudly, so a truncated run can never be read
-        // as the real number — the whole risk of a sample limit is a
+        // Printed first, and loudly, so a partial run can never be read
+        // as the real number — the whole risk of running a batch is a
         // partial score being copied into a decision.
-        if let limit = Self.sampleLimit {
-            print("⚠️ TRUNCATED RUN — first \(limit) samples only (prefix, not a sample). Not comparable to a full run.")
+        if let batch = Self.batch {
+            print("""
+                ⚠️ BATCH RUN — samples \(batch.lowerBound)..<\(batch.upperBound) of \(Self.datasetName) \
+                (\(Self.samples.count) of 60). A batch is not a small full run: the 95% interval is \
+                about ±0.22 at 20 samples. Not comparable to a full pass.
+                """)
         }
 
         for dimension in [
@@ -535,7 +642,7 @@ struct HybridRouterTests {
         ] {
             let mean = result.aggregateValue(.mean(of: dimension.metric))
             let worst = result.aggregateValue(.minimum(of: dimension.metric))
-            let sigma = result.aggregateValue(.standardDeviation(of: dimension.metric))
+            let sigma = Self.spread(of: dimension, in: result)
             print("\(dimension.name) — mean \(mean), minimum \(worst), σ \(sigma)")
 
             // WIRING CHECK, not a quality bar. A dimension that never

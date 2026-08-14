@@ -55,16 +55,8 @@ actor MLXEmbedder: Embedder {
     private func loadedContainer() async throws -> MLXEmbedders.ModelContainer {
         if let container { return container }
         if let loading {
-            Log.embedder.debug("joining the load already in flight")
             return try await loading.value
         }
-
-        // The one multi-second cost in Stage 1, and the one that decides
-        // whether prewarming worked: this line appearing DURING a request
-        // rather than at launch is the whole diagnosis.
-        Log.embedder.info("loading \(modelID) (downloads from the Hub on first use)")
-        let clock = ContinuousClock()
-        let start = clock.now
 
         let configuration = configuration
         let task = Task { try await MLXEmbedders.loadModelContainer(configuration: configuration) }
@@ -74,10 +66,8 @@ actor MLXEmbedder: Embedder {
         do {
             let loaded = try await task.value
             container = loaded
-            Log.embedder.info("model loaded in \((clock.now - start).logged)")
             return loaded
         } catch {
-            Log.embedder.error("model load FAILED after \((clock.now - start).logged): \(error)")
             throw error
         }
     }
@@ -103,20 +93,7 @@ actor MLXEmbedder: Embedder {
 
     func embed(_ texts: [String]) async throws -> [[Float]] {
         guard !texts.isEmpty else { return [] }
-        let clock = ContinuousClock()
-        let start = clock.now
         let container = try await loadedContainer()
-        let loaded = clock.now
-
-        defer {
-            // Two numbers, because they answer different questions: a
-            // slow embed is Metal work to tune, a slow load is a cold
-            // model that prewarm was supposed to have paid for.
-            Log.embedder.debug("""
-                embed \(texts.count) text(s): wait \((loaded - start).logged), \
-                forward \((clock.now - loaded).logged)
-                """)
-        }
 
         return await container.perform { (model: EmbeddingModel, tokenizer: Tokenizer, pooling: Pooling) -> [[Float]] in
             let encoded = texts.map { tokenizer.encode(text: $0, addSpecialTokens: true) }

@@ -36,10 +36,6 @@ final class ToolRoutingViewModel {
     var unavailabilityMessage: String? { router.unavailabilityMessage }
 
     func prewarm() {
-        Log.ui.info("chat appeared — prewarming \(router.strategyName)")
-        if let unavailabilityMessage = router.unavailabilityMessage {
-            Log.ui.warning("on-device model unavailable: \(unavailabilityMessage)")
-        }
         router.prewarm()
     }
 
@@ -61,7 +57,6 @@ final class ToolRoutingViewModel {
         // `none` call, finished on arrival — nothing ran, so there is no
         // timing to report and no stream to watch.
         if router.unavailabilityMessage != nil {
-            Log.ui.info("send → cloud without routing: \(router.unavailabilityMessage ?? "")")
             messages.append(ChatMessage(content: .assistant(AssistantTurn(
                 stage: .done,
                 result: Self.cloudFallback(reason: "On-device routing is unavailable; answering with the cloud model.")
@@ -96,11 +91,6 @@ final class ToolRoutingViewModel {
             // The end-to-end number, measured from the send rather than
             // from inside the router — everything this class does before
             // `route` is part of the user's wait too.
-            Log.ui.info("""
-                done in \((clock.now - start).logged) via \(answered.strategyName): \
-                \(answered.calls.map(\.tool.displayName)) \
-                \(answered.answer == nil ? "— no answer text" : "")
-                """)
 
             update(at: index) {
                 $0.stage = .done
@@ -128,12 +118,8 @@ final class ToolRoutingViewModel {
             // (and, for a request that was too long precisely because it
             // carried a lot of the user's data, an unnecessary one to
             // make). The user is told, and nothing leaves the device.
-            Log.ui.error("""
-                on-device FAILURE after \((clock.now - start).logged) — not escalated, shown to the user: \(error)
-                """)
             messages[index].content = .error(Self.friendlyMessage(for: error))
         } catch {
-            Log.ui.error("routing failed after \((clock.now - start).logged): \(error)")
             messages[index].content = .error(error.localizedDescription)
         }
     }

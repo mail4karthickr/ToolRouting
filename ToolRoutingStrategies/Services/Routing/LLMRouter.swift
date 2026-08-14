@@ -1,114 +1,29 @@
 import Foundation
 import FoundationModels
 
-// MARK: - LLM selection over a candidate set
+// MARK: - Stage 2: LLM selection over a candidate set
 //
-// One selector, two roles, distinguished only by how many tools it is
-// handed:
-//
-//   route(_:)          Sample 1 — LLM-ONLY routing. The whole catalog
-//                      goes in the prompt. This is the baseline that
-//                      justifies retrieval: it measures what the LLM
-//                      can do when nothing has narrowed the field.
-//   select(_:from:)    Hybrid Stage 2. Only the k tools Stage 1
-//                      surfaced, so the LLM spends its attention
-//                      filtering and ordering rather than scanning.
-//
-// Either way the job is the same: given the user's question and a set of
-// candidates, decide which ones the request actually needs and emit them
-// in execution order — or answer `none`.
-//
-// In the hybrid the filter matters because retrieval always returns
-// something: similarity search has no "no match" concept, so its
-// shortlist is full of plausible-but-wrong tools for any request the
-// catalog can't serve. Stage 2 is what can say no. It also does what
-// similarity search can't at all: verb reasoning (lookup vs. action),
-// multi-intent decomposition, dependency ordering, and parameter
-// extraction.
-//
-// `none` is the escalation signal: no on-device tool serves the
-// request, so the caller sends it to the CLOUD model instead. That's
-// the hybrid in one word — on-device wherever the local tools reach,
-// cloud for everything else.
-//
-// Keeping the candidate set small is the load-bearing design decision
-// of the HYBRID (and the thing route() deliberately does not do):
-// LLM routing accuracy degrades as distractor tools pile into the
-// instructions (attention dilution; ~20-tool practical ceiling), and on
-// a ~3B model every schema costs context-window budget. With O(k)
-// instructions per request, prompt size stays flat as the catalog grows.
-//
-// That O(k) property is easy to lose by accident — anything derived from
-// the ToolName enum (a serialized generationSchema, a case list) is
-// O(catalog) and reintroduces exactly the distractors Stage 1 removed.
-// Everything the prompt says about tools is built from `candidates`.
+// Not a routing strategy — a selector. `select(_:from:)` is handed a
+// candidate list (Stage 1's shortlist, from `HybridRouter`) and picks the
+// tools the query needs from it, or `none`. The candidate set is enforced
+// by the output grammar, so this stage cannot name a tool it was not
+// shown. The static helpers below interpret the plan it returns and are
+// shared with `HybridRouter`.
 
 @MainActor
-final class LLMRouter: ToolRouter {
-    let strategyName = "On-Device LLM Router"
+final class LLMRouter {
+    private let model = SystemLanguageModel(
+        useCase: .general,
+        guardrails: .permissiveContentTransformations
+    )
 
-    private let model = SystemLanguageModel.default
+    private var session: LanguageModelSession?
+    private var baseline = Transcript()
+    private(set) var sessionsBuilt = 0
+    private(set) var lastUsage: TokenUsage?
 
-    // MARK: Generable output
-
-    // SELECTION ONLY. This stage answers one question — which of the k
-    // retrieved tools does this query need, if any — and its output is a
-    // list of names. It does not extract parameters, and it does not
-    // order anything.
-    //
-    // That is the source article's design, not a simplification of it.
-    // Its ranking stage is "use the LLM to select from the k candidates,
-    // or determine that none are appropriate", and its reference code
-    // returns `Optional[Tool]` under the prompt line "Select the most
-    // appropriate tool by name, or respond 'none' if no tool is
-    // suitable." Parameters appear in that prompt as part of a tool's
-    // DESCRIPTION — what it takes, so the model can judge fit — never as
-    // something the model emits. The design doc's §5.5 reads "selection +
-    // argument extraction + invocation in one pass"; that is the doc
-    // extrapolating to Apple's native Tool protocol, and where the two
-    // disagree the article is the authority.
-    //
-    // WHAT THIS REPLACED, and why each part went:
-    //
-    //   reasoning: String     removed 2026-08-10. A whole sentence,
-    //       generated before everything else. Took the stage from 2.26s
-    //       to 1.62s — about 25ms per output token, the exchange rate
-    //       everything here is priced at.
-    //   useTools: Bool        removed 2026-08-11. A separate flag can
-    //       disagree with the list, and did: "Nearest atm" produced
-    //       `true` with `calls: []` and escalated to the cloud despite
-    //       find_atm scoring 0.98. Two fields, one invariant, nothing
-    //       enforcing it. `"none"` is now a member of the same list, so
-    //       abstention is a choice rather than a claim about a choice.
-    //   calls: [ToolName]     removed 2026-08-11. ToolName carries
-    //       parameters as associated values, so every plan paid to
-    //       generate arguments that were then thrown away — the AGENT
-    //       re-derives all of them from each Tool's own @Generable
-    //       schema, which is the only extraction that reaches an API.
-    //       It was also the "bespoke return-the-tool-name-as-JSON
-    //       protocol" the design doc itself warned against building.
-    //
-    // The remaining output is roughly ten tokens: a short list of short
-    // strings. On a stage that is entirely generation-bound, that is
-    // where its latency went.
-    //
-    // NOT ORDERED, either. Which tool runs first is Stage 3's business,
-    // and always was — the agent can only know that find_atm needs
-    // get_location's output once it holds it.
-    /// What this stage produces: tool NAMES, nothing else.
-    ///
-    /// Not `@Generable`. The schema is built per request from the
-    /// shortlist (see `schema(for:)`), which is the only way to make
-    /// "Stage 2 may choose only from Stage 1's output" a fact about the
-    /// grammar rather than a rule checked afterwards.
     struct RoutingPlan {
-        /// The model's own one-sentence read of the query, generated
-        /// BEFORE the tools and framed around the question it kept
-        /// getting wrong: is this an action or a lookup?
         let reasoning: String
-
-        /// Selected tool names, or exactly `["none"]`. Never empty — the
-        /// schema's `minimumElements` sees to that.
         let toolNames: [String]
 
         var isAbstention: Bool {
@@ -116,7 +31,12 @@ final class LLMRouter: ToolRouter {
         }
     }
 
-    // MARK: Availability
+    struct TokenUsage {
+        let input: Int
+        let output: Int
+    }
+
+    // MARK: - Availability
 
     var unavailabilityMessage: String? {
         switch model.availability {
@@ -133,136 +53,91 @@ final class LLMRouter: ToolRouter {
         }
     }
 
-    // MARK: Session
-    //
-    // ONE session, built when the chat screen appears and reused for
-    // every selection after that.
-    //
-    // That is only possible because the candidate tools moved OUT of the
-    // instructions and into the prompt. Instructions are fixed at `init`
-    // and the shortlist changes per query, so as long as the tool list
-    // lived there, every request needed its own session and paid a cold
-    // prefill for rules that never change. Split the two — rules in the
-    // instructions, candidates in the prompt — and the unchanging half
-    // gets prefilled once, at prewarm.
-    //
-    // The candidates still cost their tokens on every request. Nothing
-    // makes a per-query prompt free; what this removes is re-paying for
-    // the ~2k characters of routing policy alongside them.
+    // MARK: - Prewarm
 
-    private var session: LanguageModelSession?
-
-    /// The session exactly as built: instructions, nothing else. Each
-    /// selection is restored to this.
-    private var baseline = Transcript()
-
-    /// How many sessions this router has built. The reuse tripwire: 1
-    /// after prewarm, and 1 forever after.
-    private(set) var sessionsBuilt = 0
-
-    /// What the last `select` cost, in tokens.
-    ///
-    /// Separates the two halves of this stage's latency, which respond to
-    /// completely different fixes: INPUT is the prompt — the k tool
-    /// descriptions, which shrink by cutting examples or lowering k —
-    /// and OUTPUT is generation, which is dominated by `reasoning` being
-    /// the first and longest field of the plan. Without the split, "Stage
-    /// 2 takes 2.2s" is not an actionable number.
-    ///
-    /// A property rather than a return value because `select` has three
-    /// other callers, all evals, that want the plan and nothing else.
-    /// Safe to read immediately after the `await` returns: this router is
-    /// main-actor isolated and serves one request at a time, so nothing
-    /// can overwrite it in between.
-    private(set) var lastUsage: TokenUsage?
-
-    struct TokenUsage {
-        let input: Int
-        let output: Int
-    }
-
-    @discardableResult
-    private func warmSession() -> LanguageModelSession {
-        if let session { return session }
-        let session = LanguageModelSession(instructions: Self.policy)
-        baseline = session.transcript
-        self.session = session
-        sessionsBuilt += 1
-        // The reuse tripwire, in the log rather than only in a test: this
-        // should appear exactly once per launch. A second one means the
-        // session is being rebuilt per request and every selection is
-        // paying a cold prefill for instructions that never change.
-        Log.stage2.info("session built (#\(sessionsBuilt), \(Self.policy.count) chars of instructions)")
-        if sessionsBuilt > 1 {
-            Log.stage2.warning("session rebuilt \(sessionsBuilt)× — the instruction prefill is no longer being reused")
-        }
-        return session
-    }
-
-    // MARK: Prewarm
-
+    /// Pages the base model in and prefills the instructions the
+    /// long-lived session keeps for good.
     func prewarm() {
         guard unavailabilityMessage == nil else {
-            Log.stage2.warning("prewarm skipped — on-device model unavailable: \(unavailabilityMessage ?? "")")
             return
         }
-        // Pages the base model in — the dominant cold-start cost — and
-        // now also prefills the instructions the session keeps for good.
         warmSession().prewarm()
     }
 
-    // MARK: Routing (Sample 1 — LLM-only, whole catalog)
+    // MARK: - Selection
 
-    /// The standalone strategy: no retrieval, every tool in the prompt.
-    /// Policy is enforced here in code rather than trusted to the model,
-    /// mirroring `HybridRouter` — minus the candidate-set check,
-    /// which is vacuous when the candidate set IS the catalog.
-    func route(_ query: String) async throws -> RoutingResult {
-        let plan: RoutingPlan
+    /// Picks the tools `query` needs from `candidates`, or `none`. The
+    /// candidate set is enforced by the GRAMMAR (`schema(for:)`), not by a
+    /// check afterwards, so a pick outside the set cannot be generated.
+    ///
+    /// One retry WITHOUT the reasoning field on a guardrail trip: it is
+    /// the English sentence this stage generates that trips the filter,
+    /// not the tool names. A `.refusal` is a decision and is never retried.
+    func select(_ query: String, from candidates: [ToolDefinition]) async throws -> RoutingPlan {
         do {
-            plan = try await select(query, from: ToolCatalog.all)
-        } catch where Self.isDecliningToRoute(error) {
-            // Declining IS abstaining. Same outcome as `none`.
-            return RoutingResult(
-                strategyName: strategyName,
-                reasoning: "The on-device model declined to route this request; treated as an escalation.",
-                calls: [RoutedCall(tool: ToolName.none, confidence: nil)]
-            )
+            return try await plan(query, from: candidates, explaining: true)
+        } catch where Self.isGuardrailTrip(error) {
+            return try await plan(query, from: candidates, explaining: false)
         }
+    }
 
-        // `none` anywhere in the selection escalates the whole request —
-        // alone because that is the abstention, and mixed with real tools
-        // because a selection saying "account_balance, and also nothing
-        // fits" contradicts itself, and running half a contradiction is
-        // worse than escalating all of it.
-        guard !plan.toolNames.contains(ToolName.none.displayName) else {
-            return RoutingResult(
-                strategyName: strategyName,
-                reasoning: Self.escalationNote(for: plan),
-                calls: [RoutedCall(tool: ToolName.none, confidence: nil)]
-            )
-        }
+    /// One selection attempt. `explaining` decides whether the output
+    /// schema carries the `reasoning` sentence.
+    private func plan(
+        _ query: String,
+        from candidates: [ToolDefinition],
+        explaining: Bool
+    ) async throws -> RoutingPlan {
+        let session = warmSession()
 
-        return RoutingResult(
-            strategyName: strategyName,
-            reasoning: plan.reasoning.isEmpty ? nil : plan.reasoning,
-            // No similarity score exists on this path — the LLM is the
-            // only stage, and it doesn't produce one.
-            calls: Self.routedCalls(for: plan, query: query, scores: [:])
+        // Back to instructions-only before every selection: reuse buys the
+        // warm prefill, it must not buy conversation history.
+        session.transcript = baseline
+
+        let prompt = Self.prompt(for: query, candidates: candidates)
+
+        let response = try await session.respond(
+            to: prompt,
+            schema: try Self.schema(for: candidates, explaining: explaining),
+            // The prompt already lists these tools, with descriptions the
+            // schema does not carry.
+            includeSchemaInPrompt: false,
+            options: GenerationOptions(sampling: .greedy) // routing is classification; greedy makes it reproducible
+        )
+
+        lastUsage = TokenUsage(
+            input: response.usage.input.totalTokenCount,
+            output: response.usage.output.totalTokenCount
+        )
+
+        return RoutingPlan(
+            reasoning: (try? response.content.value(String.self, forProperty: Self.reasoningProperty)) ?? "",
+            toolNames: try response.content.value([String].self, forProperty: Self.toolsProperty)
         )
     }
 
+    /// The session is built once and kept: `sessionsBuilt` reaching 2 means
+    /// it is being rebuilt per request and every selection pays a cold
+    /// prefill for instructions that never change (asserted in StreamingTests).
+    @discardableResult
+    private func warmSession() -> LanguageModelSession {
+        if let session { return session }
+        let session = LanguageModelSession(model: model, instructions: Self.policy)
+        baseline = session.transcript
+        self.session = session
+        sessionsBuilt += 1
+        return session
+    }
+
+    // MARK: - Plan interpretation (shared with HybridRouter)
+
     /// Turns selected names into `RoutedCall`s.
     ///
-    /// Arguments come from `ToolName.withDefaultArguments`, the same
-    /// helper the embedding router uses, because THIS STAGE NO LONGER
-    /// EXTRACTS THEM. They exist only so a routed call is renderable and
-    /// carries a tool identity; the agent re-derives every real argument
-    /// from the tool's own schema before anything is invoked.
-    ///
-    /// Deduplicated by name: with parameters gone there is no such thing
-    /// as the same tool twice with different arguments, so a repeat is
-    /// always a repeat.
+    /// Arguments come from `ToolName.withDefaultArguments` because this
+    /// stage no longer extracts them; they exist so a routed call is
+    /// renderable, and the agent re-derives every real argument from the
+    /// tool's own schema. Deduplicated by name: without parameters, a
+    /// repeated name is always a repeat.
     static func routedCalls(
         for plan: RoutingPlan,
         query: String,
@@ -277,27 +152,22 @@ final class LLMRouter: ToolRouter {
             }
     }
 
-    // MARK: Escalation
+    /// Why a selection ended up going to the cloud. With `reasoning` gone
+    /// on the retry path, this sentence is the only account of why a
+    /// request left the device.
+    static func escalationNote(for plan: RoutingPlan) -> String {
+        if plan.isAbstention {
+            return "The model selected `none`: nothing in the shortlist answers this request."
+        }
+        return "The model selected `none` alongside \(plan.toolNames.filter { $0 != ToolName.none.displayName }.joined(separator: ", ")), which contradicts itself; the whole request goes to the cloud rather than executing half of it."
+    }
 
-    /// Whether the model declined to route the request at all, rather
-    /// than routing it somewhere wrong.
+    /// Whether the model declined to route the request at all, rather than
+    /// routing it somewhere wrong — a guardrail trip or refusal means the
+    /// same thing every other abstention here means.
     ///
-    /// A guardrail trip or a refusal is a DECISION, and it means the same
-    /// thing every other abstention here means: the on-device path is not
-    /// going to serve this one. Treating it as an error instead put a raw
-    /// failure in front of the user for a request the cloud could have
-    /// answered, and — since the model tends to decline exactly the
-    /// requests that ask it to move money — it fired on precisely the
-    /// class this router is supposed to escalate.
-    ///
-    /// MEASURED, 2026-08-11: "Increase my ATM withdrawal limit" refused,
-    /// the eval's `catch` was written against the deprecated
-    /// `LanguageModelSession.GenerationError` while iOS 27 throws
-    /// `LanguageModelError.refusal`, and a CORRECT abstention was scored
-    /// as no result at all.
-    /// `nonisolated` because it reads nothing but the error, and callers
-    /// need it in a `catch` guard — which cannot `await`, so a
-    /// main-actor-inherited version is unusable exactly where it is used.
+    /// `nonisolated` because callers need it in a `catch` guard, which
+    /// cannot `await`.
     nonisolated static func isDecliningToRoute(_ error: any Error) -> Bool {
         guard let error = error as? LanguageModelError else { return false }
         switch error {
@@ -308,119 +178,130 @@ final class LLMRouter: ToolRouter {
         }
     }
 
-    /// Why a selection ended up going to the cloud.
-    ///
-    /// Only two shapes remain, where there used to be four. The schema
-    /// cannot emit an empty list, cannot emit an unknown name, and has no
-    /// second field to contradict — so the only cases left are a clean
-    /// abstention and `none` sitting alongside real tools.
-    ///
-    /// Lives here, with the plan it describes, and is shared with
-    /// `HybridRouter`. It carries weight: with `reasoning` gone, this
-    /// sentence is the only account anything gives of why a request left
-    /// the device.
-    static func escalationNote(for plan: RoutingPlan) -> String {
-        if plan.isAbstention {
-            return "The model selected `none`: nothing in the shortlist answers this request."
-        }
-        return "The model selected `none` alongside \(plan.toolNames.filter { $0 != ToolName.none.displayName }.joined(separator: ", ")), which contradicts itself; the whole request goes to the cloud rather than executing half of it."
+    /// Whether the model's own words tripped a content filter, as opposed
+    /// to the model declining the request. `nonisolated` for the same
+    /// reason as `isDecliningToRoute`.
+    nonisolated static func isGuardrailTrip(_ error: any Error) -> Bool {
+        guard let error = error as? LanguageModelError else { return false }
+        if case .guardrailViolation = error { return true }
+        return false
     }
 
-    // MARK: Selection
+    // MARK: - Query heuristics, in code (shared with HybridRouter)
 
-    /// Picks the tools `query` needs from `candidates`, or `none`.
+    /// Whether the query points the search at a place it NAMES, rather
+    /// than at where the user is standing.
     ///
-    /// The candidate set is enforced by the GRAMMAR, not by a check
-    /// afterwards. `schema(for:)` builds a fresh output schema per
-    /// request whose only legal tool names are these candidates plus
-    /// `none`, so a pick outside the shortlist is not rejected — it
-    /// cannot be generated. That is what makes Stage 2 a filter over
-    /// Stage 1's output rather than a second opinion about the whole
-    /// catalog, and it is why Recall@5 bounds the pipeline honestly.
-    func select(_ query: String, from candidates: [ToolDefinition]) async throws -> RoutingPlan {
-        let session = warmSession()
-        let clock = ContinuousClock()
-        let start = clock.now
+    /// Three signals: an area word, a five-digit postcode, or a
+    /// preposition followed by a proper noun. A named BRANCH is not a
+    /// named place — "at the Main St branch" is reachable from where the
+    /// user is — so `notPlaces` is excluded explicitly.
+    ///
+    /// Only ever asked about a location plan, from `HybridRouter`. A
+    /// heuristic, and deliberately one: the model answered this same
+    /// question by option order, which is not a check.
+    nonisolated static func namesAPlace(in query: String) -> Bool {
+        let lowercased = query.lowercased()
+        if Self.areaWords.contains(where: { lowercased.contains($0) }) { return true }
 
-        // Back to instructions-only before every selection. Routing is
-        // classification, and a classifier that can see the last three
-        // questions it was asked is a different classifier: the evals
-        // would stop being reproducible, and a shortlist from two
-        // requests ago would still be in context competing with this
-        // one's. Reuse buys the warm prefill; it must not buy history.
-        session.transcript = baseline
-
-        let prompt = Self.prompt(for: query, candidates: candidates)
-        // The candidate list is the ENTIRE per-request cost of this stage
-        // and the one thing that must stay O(k). The character count is
-        // the cheap tripwire for the whole-catalog prompt creeping back
-        // in — it should track `k`, never the catalog.
-        Log.stage2.debug("""
-            select over \(candidates.count) candidate(s) \(candidates.map(\.displayName)), \
-            prompt \(prompt.count) chars
-            """)
-        Log.stage2.trace("prompt: \(prompt.loggable(4000))")
-
-        let response: LanguageModelSession.Response<GeneratedContent>
-        do {
-            response = try await session.respond(
-                to: prompt,
-                schema: try Self.schema(for: candidates),
-            // The prompt already lists these tools, with descriptions the
-            // schema does not carry. Injecting the schema too would say
-            // the names a second time in a less readable form.
-                includeSchemaInPrompt: false,
-                options: GenerationOptions(sampling: .greedy) // routing is classification; greedy makes it reproducible
-            )
-        } catch {
-            // Includes the refusals and guardrail trips the callers turn
-            // into escalations. They are a normal outcome upstream, so
-            // this is the only place the underlying error is written down.
-            Log.stage2.error("respond FAILED after \((clock.now - start).logged): \(error)")
-            throw error
+        // A postcode is a WORD of five digits — "near 94103" — where an
+        // amount carries a symbol or separator and a year is four. Read
+        // with sentence punctuation stripped, so "94103?" still counts.
+        let words = query.split(whereSeparator: \.isWhitespace)
+        if words.contains(where: { word in
+            let bare = word.trimmingCharacters(in: CharacterSet(charactersIn: ".,?!;:()"))
+            return bare.count == 5 && bare.allSatisfy(\.isNumber)
+        }) {
+            return true
         }
-        lastUsage = TokenUsage(
-            input: response.usage.input.totalTokenCount,
-            output: response.usage.output.totalTokenCount
-        )
 
-        let plan = RoutingPlan(
-            reasoning: (try? response.content.value(String.self, forProperty: Self.reasoningProperty)) ?? "",
-            toolNames: try response.content.value([String].self, forProperty: Self.toolsProperty)
-        )
-        // Input and output separately, because they respond to different
-        // fixes: input is the k tool descriptions, output is generation,
-        // and only the second one is where this stage's seconds go.
-        Log.stage2.info("""
-            plan \(plan.toolNames) in \((clock.now - start).logged) \
-            (in \(lastUsage?.input ?? -1) tok, out \(lastUsage?.output ?? -1) tok)\
-            \(plan.isAbstention ? " — ABSTAIN" : "")
-            """)
-        return plan
+        for match in query.matches(of: /\b(?:in|near|around|close to|by)\s+(?:the\s+)?([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*)/) {
+            let named = String(match.output.1).lowercased()
+            if Self.notPlaces.contains(where: { named.contains($0) }) { continue }
+            return true
+        }
+        return false
     }
 
-    // MARK: Output schema (built per request, from the candidates only)
+    /// Whether the query asks the assistant to DO something, rather than
+    /// to look something up. Every tool here only READS, so an action is a
+    /// request the device cannot serve at all — and a request mixing an
+    /// action with a lookup goes to the cloud whole.
+    ///
+    /// POSITION is what makes this safe: these words are verbs and nouns
+    /// both ("my Amazon dispute" is a lookup), so only the front of the
+    /// request or the slot straight after a conjunction counts.
+    /// High-precision, low-recall by design — a missed action still gets
+    /// Stage 2's judgement, a false one escalates a serviceable request.
+    nonisolated static func asksForAnAction(in query: String) -> Bool {
+        let words = query
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && $0 != "'" })
+            .map(String.init)
+        guard let first = words.first else { return false }
+
+        // The front of the request. "Freeze my debit card", "set up a new autopay".
+        if actionVerbs.contains(first) { return true }
+        if first == "set", words.count > 1, words[1] == "up" { return true }
+
+        // A second imperative, introduced. "…and cancel…", "…then transfer…".
+        for (index, word) in words.enumerated() where index > 0 {
+            let previous = words[index - 1]
+            guard actionIntroducers.contains(previous) else { continue }
+            if actionVerbs.contains(word) { return true }
+            if word == "set", index + 1 < words.count, words[index + 1] == "up" { return true }
+        }
+        return false
+    }
+
+    /// Words that name an area without naming a town.
+    private static let areaWords = ["downtown", "uptown", "midtown", "city centre", "city center"]
+
+    /// Proper nouns that follow a preposition without being somewhere
+    /// else: the bank's own places, and the calendar.
+    private static let notPlaces = [
+        "branch", "atm", "bank", "cash machine",
+        "january", "february", "march", "april", "may", "june", "july",
+        "august", "september", "october", "november", "december",
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+    ]
+
+    /// Verbs that ask for something to HAPPEN. `convert`, `find`, `show`,
+    /// `get`, `list` and `tell` are deliberately absent — imperatives, all
+    /// of them, and all of them lookups this catalog serves.
+    private static let actionVerbs: Set<String> = [
+        "freeze", "block", "unblock", "transfer", "send", "wire", "pay",
+        "cancel", "stop", "dispute", "report", "replace", "order",
+        "increase", "raise", "lower", "decrease", "open", "close",
+        "change", "update", "apply", "activate", "deactivate", "schedule"
+    ]
+
+    /// What can stand immediately before a second imperative. A verb
+    /// anywhere else is almost always the noun form.
+    private static let actionIntroducers: Set<String> = [
+        "and", "then", "also", "please", "to", "now", "you"
+    ]
+
+    // MARK: - Output schema (built per request, from the candidates only)
 
     private static let toolsProperty = "tools"
     private static let reasoningProperty = "reasoning"
 
-    /// An output grammar admitting exactly one shape: a list of 1–4
-    /// strings, each of which is one of THESE candidate names or `none`.
+    /// An output grammar admitting exactly one shape: 1–4 strings, each of
+    /// which is one of THESE candidate names or `none`. Three failure
+    /// modes stop existing because the decoder cannot produce them — a
+    /// tool Stage 1 never retrieved, an empty selection, and a flag
+    /// disagreeing with a list.
     ///
-    /// Three failure modes stop existing because the decoder cannot
-    /// produce them, rather than being caught and repaired downstream:
+    /// Rebuilt every request because the shortlist changes every request;
+    /// a compile-time schema could only describe the whole catalog.
     ///
-    ///   a tool Stage 1 never retrieved   not in `anyOf`
-    ///   an empty selection               `minimumElements: 1`
-    ///   a flag disagreeing with a list   there is only the list, and
-    ///                                    `none` is one of its choices
-    ///
-    /// Rebuilt every request because the shortlist changes every request.
-    /// That is cheap — this is string manipulation, not generation — and
-    /// it is the whole point: a schema fixed at compile time can only
-    /// describe the whole catalog, which is how a "shortlist" stage ends
-    /// up able to name tools it was never shown.
-    private static func schema(for candidates: [ToolDefinition]) throws -> GenerationSchema {
+    /// `explaining` is false only on the guardrail retry (see `select`).
+    /// The tool grammar is identical either way.
+    private static func schema(
+        for candidates: [ToolDefinition],
+        explaining: Bool = true
+    ) throws -> GenerationSchema {
         let choices = candidates.map(\.displayName) + [ToolName.none.displayName]
 
         let toolName = DynamicGenerationSchema(
@@ -428,30 +309,20 @@ final class LLMRouter: ToolRouter {
             description: "One of the listed tools, or none.",
             anyOf: choices
         )
+        // FIRST, so the tools are chosen with it already written:
+        // declaration order is generation order, and after `tools` this
+        // would be a rationalisation at the same token cost. Deliberately
+        // generic — the action rule is already stated in the instructions.
+        let reasoning = [
+            DynamicGenerationSchema.Property(
+                name: reasoningProperty,
+                description: "One short sentence: what the query is asking for, and whether any listed tool provides it.",
+                schema: DynamicGenerationSchema(type: String.self)
+            )
+        ]
         let plan = DynamicGenerationSchema(
             name: "ToolSelection",
-            properties: [
-                // FIRST, so the tools are chosen with it already written.
-                // Declaration order is generation order, and the whole
-                // value of this field is that it exists before the answer
-                // does — moved after `tools` it would be a rationalisation
-                // of a decision already made, at the same token cost.
-                //
-                // DELIBERATELY GENERIC. An earlier draft asked
-                // specifically whether the query was an action or a
-                // lookup, aimed at two escalation failures. That narrows a
-                // thinking step into a single test: it would push every
-                // query through one lens, do nothing for the multi-intent
-                // failures that cost more samples, and need rewriting
-                // whenever the catalog or the policy moves. The action
-                // rule is already stated, forcefully, in the instructions
-                // — this field's job is to make the model think before it
-                // answers, not to re-ask one question.
-                DynamicGenerationSchema.Property(
-                    name: reasoningProperty,
-                    description: "One short sentence: what the query is asking for, and whether any listed tool provides it.",
-                    schema: DynamicGenerationSchema(type: String.self)
-                ),
+            properties: (explaining ? reasoning : []) + [
                 DynamicGenerationSchema.Property(
                     name: toolsProperty,
                     description: "The tools needed for the query, or a single entry of none.",
@@ -466,97 +337,14 @@ final class LLMRouter: ToolRouter {
         return try GenerationSchema(root: plan, dependencies: [toolName])
     }
 
-    // MARK: Instructions (static) and prompt (per request, candidates only)
+    // MARK: - Instructions (static) and prompt (per request, candidates only)
 
-    /// Tool entries are generated from the catalog definitions so the
-    /// prompt can never drift out of sync with the UI. One numbered
-    /// entry per candidate, each with the four things a selection needs:
-    /// what the tool does, what to pass it, what a matching request looks
-    /// like, and what it is NOT for.
+    /// The rules that never change, prefilled once into the long-lived
+    /// session. Anything added here must be true of EVERY request, or it
+    /// belongs in `prompt(for:candidates:)` instead.
     ///
-    /// UNVALIDATED, 2026-08-07: the count rule reads "the fewest tools
-    /// that fully answer the request" where it used to read "one tool
-    /// unless the request clearly asks for several things". The old
-    /// wording counted THINGS ASKED, which quietly denies the implicit
-    /// chain — "find the nearest ATM" is one thing asked and two tools —
-    /// and the paragraph below had to spend its example undoing that.
-    /// "Fewest" keeps the pressure against over-decomposition without
-    /// tying the count to the number of intents.
-    ///
-    /// No measurement backs this yet. It should be A/B'd once the
-    /// trajectory metric reports per call-count bucket: the risk is the
-    /// 1-call bucket (the majority of requests) regressing to buy the
-    /// 2-3-call buckets, which the current dataset skew would hide.
-    ///
-    /// SPLIT ACROSS TWO PLACES since the session became long-lived: the
-    /// rules below never change and live in the instructions, prefilled
-    /// once; the candidate tools change every query and travel in the
-    /// prompt (`prompt(for:candidates:)`). Anything added here must be
-    /// true of EVERY request, or it belongs in the prompt.
-    ///
-    /// CUT TOO FAR ONCE, 2026-08-11, AND PARTLY RESTORED THE SAME DAY.
-    /// The compression below was done for context headroom and measured
-    /// afterwards: a 10-sample hybrid run scored escalation 1/3, and two
-    /// of the four failures were queries whose EXAMPLES had just been
-    /// deleted from this text — "how much did i spend at uber" went to
-    /// pending_payments, and "I want to dispute a charge from Amazon"
-    /// ran the dispute tools and answered with figures.
-    ///
-    /// What went back: the "most queries are lookups" framing with its
-    /// merchant/dispute/branch examples, the dispute lookup-vs-action
-    /// contrast, and the "cannot tell what is being asked" clause. The
-    /// lesson is worth more than the text: the examples were not padding
-    /// around the rules, they WERE the rules for a 3B model, and prose
-    /// that reads as redundant to someone who already knows the domain is
-    /// how the model learns the boundary. Cut here only with an eval run
-    /// on either side of the change.
-    ///
-    /// Cheap to keep, too — these tokens are prefilled once per launch
-    /// (see the Session note above), so the cost is context window, not
-    /// latency.
-    ///
-    /// The original compression, for the record, went from ~458 tokens to
-    /// ~165. The
-    /// reference implementation closes with a single sentence — "select
-    /// the most appropriate tool by name, or respond 'none'" — and most of
-    /// what was here was elaboration a good tool entry already carries.
-    /// What survived, and why a one-liner cannot replace it:
-    ///
-    ///   READ-only / whole-request  The load-bearing one. "show my balance
-    ///       and transfer $200" must be noMatch, and no tool description
-    ///       can say so: account_balance genuinely DOES serve "show my
-    ///       balance". What disqualifies it is a property of the REQUEST,
-    ///       not of the tool, so it has nowhere else to live. This is the
-    ///       app's safety policy, in a domain where acting on a
-    ///       misunderstood write is the worst outcome available.
-    ///   terse is not ambiguous    One clause, and it exists because the
-    ///       model was escalating "bal?".
-    ///   fewest tools, in order    The reference picks ONE tool; this
-    ///       stage emits an ordered plan, and the chaining example is the
-    ///       cheapest way to convey a dependency.
-    ///
-    /// Everything else went: the useTools examples (the entries carry
-    /// their own), the "Not for:" gloss (the label reads fine unexplained),
-    /// "leave calls empty" (the @Guide says it), and "do not explain your
-    /// choice" (there is no longer a field to explain into).
-    ///
-    /// NOTE ON WHAT THIS BUYS. These tokens are in the session
-    /// instructions, prefilled once at prewarm and unchanged per request,
-    /// so cutting them frees CONTEXT WINDOW, not latency. Stage 2's time
-    /// is generation: removing ~26 output tokens saved 644ms, while ~450
-    /// cached input tokens cost almost nothing. Trim here for headroom as
-    /// the catalog or topK grows; trim the OUTPUT to go faster.
-    // TRIED AND REVERTED, 2026-08-12. A "CHECK 1 — does it name a
-    // place?" step was promoted to the very front of this policy, ahead
-    // of the verb decision, aiming at sample 59 (a named place buried in
-    // a three-part request). It made the named-place test the lens every
-    // request was read through: "how late is the nearest branch open?"
-    // and "give me my account number, routing number, and debit card
-    // number" both escalated to `none` — the second names no location at
-    // all. Two working samples lost, 59 not fixed. The named-place rule
-    // works where it sits now, further down; sample 14 was fixed by
-    // resolving its contradiction with the branch-chain paragraph, not by
-    // reordering.
+    /// The examples are load-bearing, not padding — they ARE the rules for
+    /// a 3B model. Cut here only with an eval run on either side.
     private static let policy = """
             You are the tool router for a banking assistant.
 
@@ -629,6 +417,16 @@ final class LLMRouter: ToolRouter {
             prerequisite: a chain of two is fewer than a wrong list of \
             one.
 
+            FEWEST NEVER MEANS FEWER PARTS. When the query lists several \
+            things — "my Netflix charges, my pending payments, and my \
+            scheduled payments" — name a tool for EVERY one of them, even \
+            where two sound alike: pending and scheduled payments are \
+            different lists from different tools, and answering one of \
+            them twice is not answering both. Count the things asked for \
+            before you write the list, and check your list covers each. \
+            "Fewest" is about not adding steps nobody asked for; it is \
+            never a reason to leave a part of the question unserved.
+
             find_nearest_atm and find_nearest_branch ONLY take \
             coordinates, and get_location returns exactly one thing: \
             where the user is standing right now. NOTHING turns a place \
@@ -673,9 +471,9 @@ final class LLMRouter: ToolRouter {
             """
 
     /// The per-request half: which tools are on offer this time, and the
-    /// question. The tool list leads and the request closes, so the last
-    /// thing the model reads before generating is what it was asked —
-    /// the same order the single combined prompt had.
+    /// question. Closes on the coverage instruction rather than the query
+    /// — it is the last thing read before the first token, and recency is
+    /// worth more than restatement on a small model.
     private static func prompt(for query: String, candidates: [ToolDefinition]) -> String {
         let isShortlist = candidates.count < ToolCatalog.all.count
         let preamble = isShortlist
@@ -686,11 +484,6 @@ final class LLMRouter: ToolRouter {
             .map { index, tool in Self.entry(index + 1, for: tool) }
             .joined()
 
-        // Closes on the instruction rather than the question, as the
-        // reference prompt does. The rules live in the session's
-        // instructions and were prefilled long ago; this last line is the
-        // one the model reads immediately before generating, and recency
-        // is worth ~20 tokens on a small model.
         return """
             User query: "\(query)"
 
@@ -699,37 +492,23 @@ final class LLMRouter: ToolRouter {
 
             Work out in one sentence what this query is asking for and \
             whether any listed tool provides it, then select those tools \
-            by name — or none.
+            by name — or none. If the query asks for more than one thing, \
+            count them, and make sure your list has a tool for every one.
             """
     }
 
-    /// One numbered tool entry, in the reference implementation's shape:
-    /// name and description, then parameters, then examples.
+    /// One numbered tool entry: name and description, then parameters,
+    /// then examples.
     ///
     ///     1. account_balance: Current balance for an account.
     ///        Parameters: which account — checking, savings, credit card
     ///        Examples: "bal?", "how much is in savings"
     ///        Not for: transfers or payments
     ///
-    /// THE ENTRIES ARE NOT WHERE THE PROMPT IS TRIMMED. They were cut to
-    /// two lines earlier the same day and put back: describing a
-    /// candidate is the one thing this prompt is for, and a selection
-    /// stage that cannot see what a tool takes or what asking for it
-    /// looks like is being asked to choose blind. The budget came out of
-    /// the static policy instead, which is prose about how to behave and
-    /// compresses without losing a rule.
-    ///
-    /// `Not for:` is the one addition to the reference shape. It is the
-    /// only disambiguation the prompt carries — what separates
-    /// card_limits from "raise my limit", or account_number from "routing
-    /// no" — and this catalog has near neighbours the reference's toy set
-    /// does not.
-    ///
-    /// Examples stay capped at two. The full set overflowed the context
-    /// window on a three-call request (the eval recorded
-    /// `exceededContextWindowSize`, which in production means a request
-    /// that silently stops being served on device). Two is enough to show
-    /// the phrasing; the description carries the meaning.
+    /// `Not for:` is the only disambiguation the prompt carries — what
+    /// separates card_limits from "raise my limit". Examples stay capped
+    /// at two: the full set overflowed the context window on a three-call
+    /// request.
     private static func entry(_ number: Int, for tool: ToolDefinition) -> String {
         let examples = ([tool.promptExample].compactMap { $0 } + tool.exampleQueries)
             .prefix(2)

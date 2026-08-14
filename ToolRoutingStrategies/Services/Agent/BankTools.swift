@@ -18,7 +18,20 @@ struct AccountArgument {
 
 @Generable
 struct CardArgument {
-    @Guide(description: "Which card the question is about. Use `all` when it does not name one — 'what's my card limit?' names no card.")
+    /// MEASURED, 2026-08-13. "Show my card limits and my credit card
+    /// number" called card_number with `all`, and the reply handed the
+    /// customer their DEBIT number as well — Faithfulness 3 and
+    /// Naturalness 3 for "the debit card number the customer never asked
+    /// for". Every figure was real; none of it was asked for.
+    ///
+    /// The guide said when to use `all` and never said when not to, so
+    /// the named case now leads and carries the example. `all` is the
+    /// fallback it was meant to be.
+    @Guide(description: """
+        Which card the question is about. When it names one, use THAT card — "my credit card \
+        number" is credit, "my debit card" is debit. Use `all` ONLY when the question names no \
+        card at all, as in "what's my card limit?".
+        """)
     var card: CardType
 }
 
@@ -47,9 +60,66 @@ struct NoArguments {}
 // changes the SHAPE of the output and nothing about its content — no
 // figure, label, or date is rewritten on the way past.
 enum ToolOutput {
-    /// Rows as one sentence: a lead that counts them, then the rows.
-    static func sentence(_ rows: [String], lead: (Int) -> String, empty: String) -> String {
-        rows.isEmpty ? empty : "\(lead(rows.count)): \(list(rows))."
+    /// Rows as one sentence: a lead that says what they are, then the
+    /// rows.
+    ///
+    /// NO COUNT IN THE LEAD, since 2026-08-13, and the reason is a
+    /// fabrication rather than a matter of taste. These lists are
+    /// COMPLETE — every fee, every pending payment, every scheduled one —
+    /// so a number in front of them tells the reader nothing the list
+    /// does not, and a model reading "3 scheduled payments: …" writes
+    /// "three scheduled payments totaling $2,345.89", a figure no tool
+    /// returned and that cannot be computed from a list containing "the
+    /// statement balance". Faithfulness 1, the only 1 in that run.
+    ///
+    /// `list_transactions` is the exception that proves the rule and
+    /// keeps its own wording: it names three of eight, so something has
+    /// to say the list is partial. It says it with "includes".
+    static func sentence(_ rows: [String], lead: String, empty: String) -> String {
+        rows.isEmpty ? empty : "\(lead) \(list(rows))."
+    }
+
+    /// The closest one, then the rest — for the finders, where the
+    /// question is "which is nearest" and the other rows are context.
+    ///
+    /// MEASURED, 2026-08-12. `find_nearest_atm` returned three rows joined
+    /// by newlines and the answers read "Here are the ATMs near your
+    /// location: Market Square ATM — 0.1 mi, 24 h, Main St Branch ATM —
+    /// 0.4 mi, 24 h, QuickCash Mart — 0.6 mi, until 11 pm" — every figure
+    /// correct, Naturalness 3 for reading as a pasted list, against a
+    /// reference answer that names the closest one and stops. A list of
+    /// equals invites a list back; naming the answer first does not.
+    ///
+    /// The others stay because they are real and the question was about
+    /// proximity, not exclusivity — dropping them here would be the tool
+    /// deciding what the customer may know. They keep their NAMES and
+    /// lose their detail, which is the second half of the same finding:
+    /// spelling all three out in full got the whole list recited back.
+    ///
+    /// MEASURED, 2026-08-13. With every row carrying its distance and
+    /// hours, "atm near me" and "Where's the closest branch?" both
+    /// answered with all three — "longer and more list-like than a
+    /// person's answer", "reads slightly like a dump of the full lookup
+    /// rather than a direct answer", Naturalness 3 each. The question
+    /// asked for one. Naming the rest without their figures says they
+    /// exist, which is all the question needs from them, and leaves
+    /// nothing to recite.
+    ///
+    /// `describe` pulls the name off a row that reads
+    /// `Market Square ATM, 0.1 miles away and open 24 hours` — the name
+    /// is everything before the first comma, which is a property of how
+    /// the client writes these rows and is asserted in ToolOutputTests.
+    static func nearest(_ rows: [String], kind: String, empty: String) -> String {
+        guard let closest = rows.first else { return empty }
+        let rest = rows.dropFirst().map(name(inRow:))
+        guard !rest.isEmpty else { return "The closest \(kind) is \(closest)." }
+        let plural = rest.count == 1 ? "is" : "are"
+        return "The closest \(kind) is \(closest). \(list(rest)) \(plural) also nearby."
+    }
+
+    /// A finder row's name: everything up to the detail that follows it.
+    static func name(inRow row: String) -> String {
+        String(row.prefix(while: { $0 != "," })).trimmingCharacters(in: .whitespaces)
     }
 
     /// Joins clauses the way a person would say them. Hand-rolled rather
@@ -143,11 +213,33 @@ struct ListTransactionsTool: Tool {
             .map(\.element)
         let named = ToolOutput.list(recent.prefix(namedInSummary).map(Self.clause(for:)))
         guard recent.count > namedInSummary else {
-            let noun = recent.count == 1 ? "transaction" : "transactions"
-            return "\(recent.count) \(noun) in the last \(days) days: \(named)."
+            return "Recent activity in the last \(days) days includes \(named)."
         }
-        return "\(recent.count) transactions in the last \(days) days, "
-            + "the most recent being \(named)."
+        // THE COUNT GOES LAST, and that is not a cosmetic choice. It led
+        // the sentence until 2026-08-13 — "8 transactions in the last 7
+        // days, the most recent being …" — and the model opened its reply
+        // with it every time, which the judge scored Naturalness 3 twice
+        // in one run: "reads like a restated data summary". The same run
+        // scored 4 on the sample whose answer happened to start with the
+        // merchants instead.
+        //
+        // It stays in the string because naming three of eight without
+        // saying so is a silent truncation. At the end it is a qualifier
+        // a natural reply can carry or drop; at the front it is the first
+        // thing the customer hears about their own week.
+        // "INCLUDES" IS THE HONESTY, not the count that used to follow it.
+        // Naming three of eight has to say somewhere that it is naming
+        // three of eight, and the sentence ended "…, out of 8
+        // transactions in all" until 2026-08-13 to do exactly that. The
+        // model repeated the clause verbatim and the judge marked it
+        // twice in one run — Faithfulness 3 and Naturalness 3, both
+        // quoting "out of 8 transactions in all" as the stilted part.
+        //
+        // "Includes" carries the same claim in a word the reply can use
+        // without sounding like a report: it says these are among the
+        // transactions, never that they are all of them. The exact count
+        // is what `search_transactions` is for.
+        return "Recent activity in the last \(days) days includes \(named)."
     }
 
     /// How many transactions the summary names. Three because that is
@@ -167,14 +259,14 @@ struct ListTransactionsTool: Tool {
         return "\(amount) \(preposition) \(transaction.merchant) on \(date)"
     }
 
-    /// The row form, kept for `search_transactions`, where the rows ARE
-    /// the answer: that tool is asked about one merchant and returns a
-    /// handful of matches, so there is no dump to provoke.
-    static func line(for transaction: Transaction) -> String {
-        let amount = transaction.amount.formatted(.currency(code: "USD"))
-        let date = transaction.date.formatted(.dateTime.month(.abbreviated).day())
-        return "\(date) · \(transaction.merchant) · \(transaction.account) · \(amount)"
-    }
+    // THE ROW FORM IS GONE, 2026-08-13. `date · merchant · account ·
+    // amount` survived here for `search_transactions`, on the argument
+    // that for a single-merchant search the rows ARE the answer. True,
+    // and beside the point: what a reply needs from a match is the
+    // amount, the merchant and the date, which `clause(for:)` gives in
+    // words. The account column and the middots were the last of the
+    // table shape left in the catalog, and the last thing a reply could
+    // paste through.
 }
 
 struct SearchTransactionsTool: Tool {
@@ -188,17 +280,43 @@ struct SearchTransactionsTool: Tool {
         var merchant: String
     }
 
+    /// THE LAST ROW-SHAPED PAYLOAD IN THE CATALOG, until 2026-08-13.
+    ///
+    /// It returned `12 Aug · Uber · Credit Card · -$23.75` with a
+    /// `Total:` line under it, and it was the last place a middot could
+    /// reach a reply. "how much did i spend at uber" came back "The
+    /// charge was $23.75 at Uber" — Naturalness 3 for stilted phrasing
+    /// that "reframes the question about spending as a 'charge'", which
+    /// is what a row labelled with an account and a sign invites.
+    ///
+    /// The rows were defensible here longer than anywhere else, because
+    /// for a single-merchant search the rows ARE the answer rather than a
+    /// list to summarise. What was never defensible is their SHAPE: the
+    /// account column and the minus sign are for a table, and a reply
+    /// about spending needs neither — the direction of the money is
+    /// already in the word "spent".
+    ///
+    /// The total stays, and stays precomputed. "What did I spend at X" is
+    /// a sum question, and leaving a small model to add a column up is
+    /// the arithmetic risk this whole file avoids.
     func call(arguments: MerchantSearch) async throws -> String {
         let transactions = try await client.searchTransactions(merchant: arguments.merchant)
         guard !transactions.isEmpty else {
             return "No transactions found for \(arguments.merchant)."
         }
-        // The total is included because "what did I spend at X" is a sum
-        // question; leaving the model to add up a list is a needless
-        // arithmetic risk on a small model.
+        let clauses = transactions.map(ListTransactionsTool.clause(for:))
         let total = transactions.reduce(Decimal.zero) { $0 + $1.amount }
-        return transactions.map(ListTransactionsTool.line(for:)).joined(separator: "\n")
-            + "\nTotal: \(total.formatted(.currency(code: "USD")))"
+        // "Spent" only when every match is money going OUT. A search that
+        // turns up a payroll credit is not spending, and saying so would
+        // be the tool putting a word in the answer that the figures do
+        // not support.
+        guard transactions.allSatisfy({ $0.amount < 0 }) else {
+            return "Matching transactions: \(ToolOutput.list(clauses)), "
+                + "\(total.formatted(.currency(code: "USD"))) in total."
+        }
+        guard transactions.count > 1 else { return "You spent \(clauses[0])." }
+        return "You spent \(ToolOutput.list(clauses)), "
+            + "\(abs(total).formatted(.currency(code: "USD"))) in total."
     }
 }
 
@@ -295,7 +413,7 @@ struct FeesAndChargesTool: Tool {
         let fees = try await client.feesAndCharges(accountType: arguments.account)
         return ToolOutput.sentence(
             fees,
-            lead: { "\($0) \($0 == 1 ? "fee" : "fees") and charges" },
+            lead: "You paid",
             empty: "No fees on this account."
         )
     }
@@ -335,15 +453,16 @@ struct PendingPaymentsTool: Tool {
 
     func call(arguments: AccountArgument) async throws -> String {
         let payments = try await client.pendingPayments(accountType: arguments.account)
-        // "pending payment" in the lead, not "payment", because the rows
-        // themselves do not always say which list they came from: the
-        // PG&E row reads "(scheduled for the 1st)" while sitting in the
-        // PENDING list, and sample 7 has twice been marked down for
-        // reporting scheduled items as pending. The lead is the only
-        // place that distinction survives.
+        // THE LEAD CARRIES THE STATUS, because the clauses no longer can:
+        // a payment's own description says what it is and when, not which
+        // list it came from. Sample 51 has been marked down three times
+        // for reporting scheduled items as pending, so "pending" and
+        // "still processing" are both said here — the first is the word
+        // the customer used, the second is what it means, and the
+        // scheduled list can claim neither.
         return ToolOutput.sentence(
             payments,
-            lead: { "\($0) pending \($0 == 1 ? "payment" : "payments")" },
+            lead: "These payments are pending and still processing:",
             empty: "Nothing pending."
         )
     }
@@ -359,7 +478,7 @@ struct ScheduledPaymentsTool: Tool {
         let payments = try await client.scheduledPayments(accountType: arguments.account)
         return ToolOutput.sentence(
             payments,
-            lead: { "\($0) scheduled \($0 == 1 ? "payment" : "payments")" },
+            lead: "These payments are scheduled to go out:",
             empty: "Nothing scheduled."
         )
     }
@@ -407,9 +526,11 @@ struct FindNearestBranchTool: Tool {
             latitude: arguments.latitude,
             longitude: arguments.longitude
         )
-        return branches.isEmpty
-            ? "No branches near \(arguments.latitude), \(arguments.longitude)."
-            : branches.joined(separator: "\n")
+        return ToolOutput.nearest(
+            branches,
+            kind: "branch",
+            empty: "No branches near \(arguments.latitude), \(arguments.longitude)."
+        )
     }
 }
 
@@ -438,9 +559,11 @@ struct FindNearestATM: Tool {
             latitude: arguments.latitude,
             longitude: arguments.longitude
         )
-        return atms.isEmpty
-            ? "No ATMs near \(arguments.latitude), \(arguments.longitude)."
-            : atms.joined(separator: "\n")
+        return ToolOutput.nearest(
+            atms,
+            kind: "ATM",
+            empty: "No ATMs near \(arguments.latitude), \(arguments.longitude)."
+        )
     }
 }
 
@@ -487,7 +610,11 @@ struct CreditScoreTool: Tool {
     typealias Arguments = NoArguments
 
     func call(arguments: NoArguments) async throws -> String {
-        "Credit score: \(try await client.creditScore())"
+        // "Credit score: 742" is a field with a label, and a label is the
+        // one shape this catalog no longer hands the model — see
+        // `ToolOutput`. Said as a sentence, in the second person, it is
+        // already the answer.
+        "Your credit score is \(try await client.creditScore())."
     }
 }
 
@@ -499,48 +626,7 @@ struct RewardPointsTool: Tool {
 
     func call(arguments: NoArguments) async throws -> String {
         let points = try await client.rewardPoints()
-        return "\(points.formatted()) reward points"
-    }
-}
-
-// MARK: - Call logging
-//
-// Wraps a tool so its invocation is written to the log as it happens,
-// rather than reconstructed from the transcript after the turn.
-//
-// The two are not equivalent. The transcript is read once the generation
-// FINISHES, so a turn that hangs inside `client.listTransactions` or
-// throws mid-chain leaves no record of the call at all — which is
-// precisely the run worth having a log for. This writes a line when the
-// call goes out, and another when it comes back, so an interrupted turn
-// still shows which tool it was sitting in.
-//
-// Forwarding is total: `name`, `description` and `parameters` are the
-// wrapped tool's, so what the model is shown and what it dispatches to
-// are unchanged. Only `call` gains anything.
-
-private struct LoggedTool<Wrapped: Tool>: Tool {
-    let wrapped: Wrapped
-
-    var name: String { wrapped.name }
-    var description: String { wrapped.description }
-    var parameters: GenerationSchema { wrapped.parameters }
-    var includesSchemaInInstructions: Bool { wrapped.includesSchemaInInstructions }
-
-    func call(arguments: Wrapped.Arguments) async throws -> Wrapped.Output {
-        let clock = ContinuousClock()
-        let start = clock.now
-        Log.tools.debug("→ \(wrapped.name)(\(String(describing: arguments).loggable()))")
-        do {
-            let output = try await wrapped.call(arguments: arguments)
-            Log.tools.info("← \(wrapped.name) \((clock.now - start).logged): \(String(describing: output).loggable())")
-            return output
-        } catch {
-            // The agent surfaces a tool failure as a degraded answer, so
-            // without this the cause never appears anywhere.
-            Log.tools.error("✗ \(wrapped.name) threw after \((clock.now - start).logged): \(error)")
-            throw error
-        }
+        return "You have \(points.formatted()) reward points."
     }
 }
 
@@ -554,20 +640,8 @@ enum BankToolRegistry {
     ///
     /// `.none` deliberately returns nil: it is an escalation decision,
     /// not something the agent can run.
-    ///
-    /// Everything handed out is wrapped in `LoggedTool`, so there is one
-    /// place that decides tools are logged rather than twenty `call`
-    /// bodies that each have to remember.
     static func tool(named displayName: String, client: any BankAPIClient) -> (any Tool)? {
-        guard let tool = implementation(named: displayName, client: client) else { return nil }
-        return logged(tool)
-    }
-
-    /// Opens the existential: `tool` arrives as `any Tool` and binds to
-    /// `T`, which is what `LoggedTool` needs to forward the associated
-    /// `Arguments` and `Output` types.
-    private static func logged<T: Tool>(_ tool: T) -> any Tool {
-        LoggedTool(wrapped: tool)
+        implementation(named: displayName, client: client)
     }
 
     private static func implementation(named displayName: String, client: any BankAPIClient) -> (any Tool)? {

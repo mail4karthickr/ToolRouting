@@ -117,15 +117,20 @@ enum MockGroundTruth {
                 // coordinates available are the device's own — the same
                 // ones get_location hands the agent at runtime. Same for
                 // find_nearest_atm below.
+                //
+                // THROUGH THE TOOL, like fees and the payment lists above.
+                // These two joined the client's rows with newlines here
+                // while the tools shaped them into a nearest-first
+                // sentence, which is the second implementation this file
+                // exists to prevent — it would describe the run as
+                // returning something no run has returned since.
                 let here = try await client.currentLocation()
-                return try await client
-                    .findNearestBranches(latitude: here.latitude, longitude: here.longitude)
-                    .joined(separator: "\n")
+                return try await FindNearestBranchTool(client: client)
+                    .call(arguments: .init(latitude: here.latitude, longitude: here.longitude))
             case "find_nearest_atm":
                 let here = try await client.currentLocation()
-                return try await client
-                    .findNearestATMs(latitude: here.latitude, longitude: here.longitude)
-                    .joined(separator: "\n")
+                return try await FindNearestATM(client: client)
+                    .call(arguments: .init(latitude: here.latitude, longitude: here.longitude))
             case "convert_currency":
                 return try await client.convertCurrency(amount: fallback(argument, "$100"), to: "EUR")
             case "list_transactions":
@@ -140,11 +145,15 @@ enum MockGroundTruth {
                 // ListTransactionsTool stopped emitting rows.
                 return ListTransactionsTool.summary(of: transactions, days: days)
             case "search_transactions":
+                // Through the tool, like every other entry here. This
+                // case kept its own copy of the row-and-total format
+                // until 2026-08-13 and drifted the moment the tool
+                // stopped emitting rows — the exact failure the header
+                // of this file is about.
                 let transactions = try await client.searchTransactions(merchant: fallback(argument, "Starbucks"))
                 guard !transactions.isEmpty else { return nil }
-                let total = transactions.reduce(Decimal.zero) { $0 + $1.amount }
-                return transactions.map(Self.line(for:)).joined(separator: "\n")
-                    + "\nTotal: \(total.formatted(.currency(code: "USD")))"
+                return try await SearchTransactionsTool(client: client)
+                    .call(arguments: .init(merchant: fallback(argument, "Starbucks")))
             // "none" and anything unrecognized have no output to derive.
             default:
                 return nil

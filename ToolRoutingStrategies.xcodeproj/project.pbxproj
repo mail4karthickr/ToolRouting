@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		B4CF000330410003001919E6 /* ClaudeForFoundationModels in Frameworks */ = {isa = PBXBuildFile; productRef = B4CF000230410002001919E6 /* ClaudeForFoundationModels */; };
 		B4E0000330310003001919E6 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = B4E0000230310002001919E6 /* MLXEmbedders */; };
-		B4F0000330510003001919E6 /* Puppy in Frameworks */ = {isa = PBXBuildFile; productRef = B4F0000230510002001919E6 /* Puppy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -93,7 +92,6 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				B4E0000330310003001919E6 /* MLXEmbedders in Frameworks */,
-				B4F0000330510003001919E6 /* Puppy in Frameworks */,
 			);
 		};
 		B4CL100530400006001919E6 /* Frameworks */ = {
@@ -169,7 +167,6 @@
 			name = ToolRoutingStrategies;
 			packageProductDependencies = (
 				B4E0000230310002001919E6 /* MLXEmbedders */,
-				B4F0000230510002001919E6 /* Puppy */,
 			);
 			productName = ToolRoutingStrategies;
 			productReference = B485BB7930075EC80006AEB4 /* ToolRoutingStrategies.app */;
@@ -224,7 +221,6 @@
 			packageReferences = (
 				B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				B4CF000130410001001919E6 /* XCRemoteSwiftPackageReference "ClaudeForFoundationModels" */,
-				B4F0000130510001001919E6 /* XCRemoteSwiftPackageReference "Puppy" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B485BB7A30075EC80006AEB4 /* Products */;
@@ -601,14 +597,6 @@
 				version = 2.31.3;
 			};
 		};
-		B4F0000130510001001919E6 /* XCRemoteSwiftPackageReference "Puppy" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sushichop/Puppy.git";
-			requirement = {
-				kind = upToNextMinorVersion;
-				minimumVersion = 0.9.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -621,11 +609,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
 			productName = MLXEmbedders;
-		};
-		B4F0000230510002001919E6 /* Puppy */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = B4F0000130510001001919E6 /* XCRemoteSwiftPackageReference "Puppy" */;
-			productName = Puppy;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
