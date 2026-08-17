@@ -6,8 +6,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/anthropics/ClaudeForFoundationModels.git",
       "state" : {
-        "revision" : "410f5e4546fa0f9bd8bb926b77257725af81c9f7",
-        "version" : "0.1.4"
+        "revision" : "fd965bfb9f2d871e4345ecd65557d01f51588ccf"
       }
     },
     {

@@ -66,15 +66,18 @@ nonisolated enum ChatRequestBuilder {
                     )
                 )
 
-            case .reasoning:
-                // Dropped on purpose. The chat-completions surface has no
-                // portable way to replay a prior turn's reasoning, and a
-                // gateway that exposes one does it under a vendor key.
+            default:
+                // Reasoning entries, and anything added to `Transcript.Entry`
+                // later, are dropped on purpose. The chat-completions surface
+                // has no portable way to replay a prior turn's reasoning, and
+                // a gateway that exposes one does it under a vendor key.
                 // Reasoning is not required for correctness — it is context
                 // the model regenerates.
-                continue
-
-            @unknown default:
+                //
+                // Matched with `default` rather than by name for the same
+                // reason as `text(of:)` below: naming a case of a resilient
+                // enum emits a reference to its case descriptor, and a case
+                // the running OS does not export makes dyld abort at launch.
                 continue
             }
         }
@@ -140,13 +143,19 @@ nonisolated enum ChatRequestBuilder {
             switch segment {
             case .text(let text): text.content
             case .structure(let structure): structure.content.jsonString
-            // Images would need a `{type: "image_url"}` content part and a
-            // gateway that accepts one. Nothing in this app sends them, so
-            // they are dropped rather than half-supported — and
+            // Attachments, custom segments and anything added later carry
+            // nothing this gateway can send. Images would need a
+            // `{type: "image_url"}` content part and a gateway that accepts
+            // one, so they are dropped rather than half-supported — and
             // `capabilities` never claims `.vision`, so the framework will
             // not route them here.
-            case .attachment, .custom: nil
-            @unknown default: nil
+            //
+            // Matched with `default` rather than by name on purpose.
+            // `Transcript.Segment` is resilient, so naming a case emits a
+            // reference to its case descriptor, and a case that only exists
+            // in a newer SDK than the OS on the device makes dyld abort the
+            // process at launch. Every branch here returns nil anyway.
+            default: nil
             }
         }
         .joined(separator: "\n")

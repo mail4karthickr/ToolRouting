@@ -117,7 +117,7 @@ struct LLMRoutingEvaluation: Evaluation {
         // k comes from the hybrid router's own config rather than a copy,
         // so retuning the shortlist size cannot leave this eval measuring
         // a k that production no longer uses.
-        let shortlist = try await MiniLMRouter().retrieve(query, topK: HybridRouter.Config().topK)
+        let shortlist = try await MiniLMRouter().retrieve(query, topK: ChatAgent.Config().topK)
 
         // Stage 1 abstained, so Stage 2 never runs and the request goes to
         // the cloud. Counts as "none" because that is the outcome, but it

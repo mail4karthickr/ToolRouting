@@ -47,7 +47,7 @@ struct StreamingTests {
     }
 
     static func record(_ query: String = query) async throws -> Recording {
-        let router = HybridRouter()
+        let router = ChatAgent()
         var recording = Recording()
         let clock = ContinuousClock()
         let start = clock.now
@@ -185,7 +185,7 @@ struct SessionReuseTests {
 
     @Test("The agent builds a session per turn, bound to that turn's plan")
     func agentBindsEachTurnToItsPlan() async throws {
-        let agent = ToolExecutionAgent()
+        let agent = ChatAgent()
         agent.prewarm()
 
         // Prewarm builds nothing reusable — it pages the model in, which
@@ -214,7 +214,7 @@ struct SessionReuseTests {
 
     @Test("A follow-up carries the conversation but not the earlier turn's tools")
     func historyCarriesWithoutTheToolbox() async throws {
-        let agent = ToolExecutionAgent()
+        let agent = ChatAgent()
 
         _ = try await agent.answer(
             "What's my checking balance?",
@@ -249,7 +249,7 @@ struct SessionReuseTests {
 
     @Test("A tool outside the plan cannot be called")
     func unroutedToolsAreUnreachable() async throws {
-        let agent = ToolExecutionAgent()
+        let agent = ChatAgent()
 
         // A plan of one tool, against a query that invites another: the
         // model would like a merchant search, and search_transactions is
@@ -269,7 +269,7 @@ struct SessionReuseTests {
 
     @Test("A turn's prompt carries the routed tools, not every bound tool")
     func promptScalesWithThePlanNotTheCatalog() async throws {
-        let agent = ToolExecutionAgent()
+        let agent = ChatAgent()
 
         let one = try await agent.answer(
             "What's my checking balance?",
@@ -292,7 +292,7 @@ struct SessionReuseTests {
 
     @Test("Tools still dispatch after the instructions entry is rewritten")
     func dispatchSurvivesTheRewrite() async throws {
-        let agent = ToolExecutionAgent()
+        let agent = ChatAgent()
 
         let balance = try await agent.answer(
             "What's my checking balance?",

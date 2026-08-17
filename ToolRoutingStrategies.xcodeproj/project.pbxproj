@@ -585,8 +585,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/anthropics/ClaudeForFoundationModels.git";
 			requirement = {
-				kind = upToNextMinorVersion;
-				minimumVersion = 0.1.4;
+				kind = revision;
+				revision = fd965bfb9f2d871e4345ecd65557d01f51588ccf;
 			};
 		};
 		B4E0000130310001001919E6 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {

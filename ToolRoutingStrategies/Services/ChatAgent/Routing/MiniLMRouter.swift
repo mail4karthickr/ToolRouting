@@ -1,25 +1,10 @@
 import Foundation
 
-// MARK: - Stage 1: Embedding retrieval (MLX / MiniLM)
-//
-// Pure semantic retrieval: the query and every tool's texts live in the
-// same embedding space, and shortlisting is a nearest-neighbor lookup. No
-// generation happens at all — so it is fast and deterministic, but it can
-// only RANK: it cannot extract parameters, decompose multi-step requests,
-// or order dependent chains. Those are Stage 2's job; `HybridRouter`
-// hands this stage's shortlist to `LLMRouter.select`.
-
 @MainActor
 final class MiniLMRouter {
     let strategyName = "MiniLM Embedding Router"
 
     struct Config {
-        /// Below this best-match similarity the router ABSTAINS — the
-        /// embedding stage's only "none of the above" mechanism (an
-        /// embedding model can't understand an escalation class; "none"
-        /// as an explicit option belongs to LLM-based selection).
-        /// Calibrated against the eval per design doc §6.5 — tune with
-        /// evidence, not vibes.
         var similarityThreshold: Float = 0.45
     }
 
@@ -28,90 +13,42 @@ final class MiniLMRouter {
     private var indexTask: Task<ToolIndex, Error>?
     private var warmTask: Task<Void, Never>?
 
-    // MARK: Index
-
-    private func activeIndexTask() -> Task<ToolIndex, Error> {
-        if let indexTask { return indexTask }
-        let embedder = embedder
-        let specs = ToolCatalog.all.map(\.routableSpec)
-        let task = Task.detached(priority: .userInitiated) {
-            try await ToolIndexStore.loadOrBuild(specs: specs, embedder: embedder)
-        }
-        indexTask = task
-        return task
-    }
-
-    /// Kicks off the model download / index build ahead of the first
-    /// request. Idempotent; a failed build is retried on the next route.
-    ///
-    /// TWO tasks, not one, and the second is the one that matters in
-    /// practice. Building the index only loads the embedding model when
-    /// there is no cached index to read — so from the second launch
-    /// onwards the index task returns in milliseconds having touched
-    /// nothing, and the model was still cold when the user asked their
-    /// first question. That is where a measured 6.4s Stage 1 came from,
-    /// once per launch, on a stage whose steady-state cost is ~20ms.
-    ///
-    /// They run concurrently because they are independent: the index task
-    /// reads a file, the warm task loads weights. On a first-ever launch
-    /// both want the model and the embedder's own load task dedupes them.
-    func prewarm() {
-        _ = activeIndexTask()
-
-        guard warmTask == nil else { return }
-        let embedder = embedder
-        // Failure is dropped on purpose: this is an optimisation, and a
-        // model that could not be warmed will be loaded — and its error
-        // reported — by the request that actually needs it.
-        //
-        // A warm that fails is not fatal: the weights load again, on
-        // demand, inside the request that needs them.
-        warmTask = Task.detached(priority: .userInitiated) {
-            try? await embedder.warm()
-        }
-    }
-
-    // MARK: Retrieval (Stage 1 of the hybrid; article's `retrieve_candidates`)
-
-    /// A tool surfaced by similarity search, with its confidence.
     struct RetrievedTool: Sendable {
         let toolName: String
         let score: Float
     }
 
-    /// The shortlist plus the full ranking behind it.
     struct Retrieval: Sendable {
-        /// What Stage 2 gets to see.
         let shortlist: [RetrievedTool]
-        /// EVERY tool in the index, ranked — including the ones that lost.
-        /// Retrieval is the pipeline's recall ceiling, and a tool missing
-        /// from the shortlist is unrecoverable downstream, so the losers
-        /// are the diagnostic: a near miss is a threshold to tune, an
-        /// also-ran at 0.2 is a tool description to rewrite.
         let ranked: [RetrievedTool]
     }
 
-    /// The similarity floor a tool must clear to be shortlisted.
     var similarityThreshold: Float { config.similarityThreshold }
 
-    /// Threshold-filtered top-k tools by similarity. The result is a
-    /// SHORTLIST ranked by score — never an execution plan: ordering,
-    /// dependencies, and multi-tool composition belong to the LLM stage.
-    /// An empty result is the abstention signal ("NO MATCH": nothing
-    /// cleared the threshold).
+    // MARK: - Prewarm
+
+    func prewarm() {
+        _ = activeIndexTask()
+
+        guard warmTask == nil else { return }
+        let embedder = embedder
+        warmTask = Task.detached(priority: .userInitiated) {
+            try? await embedder.warm()
+        }
+    }
+
+    // MARK: - Retrieval
+
     func retrieve(_ query: String, topK: Int = 4) async throws -> [RetrievedTool] {
         try await rank(query, topK: topK).shortlist
     }
 
-    /// `retrieve`, keeping the tools it discarded. Same work, same
-    /// scores — only the reporting differs, so the shortlist a caller
-    /// gets here is identical to the one `retrieve` would return.
     func rank(_ query: String, topK: Int = 4) async throws -> Retrieval {
         let index: ToolIndex
         do {
             index = try await activeIndexTask().value
         } catch {
-            indexTask = nil // e.g. offline during first model download — retry next time
+            indexTask = nil
             throw error
         }
 
@@ -119,8 +56,6 @@ final class MiniLMRouter {
             throw CancellationError()
         }
 
-        // Score per tool = max dot product over its entries (vectors are
-        // normalized, so dot product IS cosine similarity).
         var bestByTool: [String: Float] = [:]
         for entry in index.entries {
             let score = zip(entry.vector, queryVector).reduce(into: Float.zero) { $0 += $1.0 * $1.1 }
@@ -135,15 +70,24 @@ final class MiniLMRouter {
 
         return Retrieval(shortlist: shortlist, ranked: ranked)
     }
+
+    // MARK: - Index
+
+    private func activeIndexTask() -> Task<ToolIndex, Error> {
+        if let indexTask { return indexTask }
+        let embedder = embedder
+        let specs = ToolCatalog.all.map(\.routableSpec)
+        let task = Task.detached(priority: .userInitiated) {
+            try await ToolIndexStore.loadOrBuild(specs: specs, embedder: embedder)
+        }
+        indexTask = task
+        return task
+    }
 }
 
 // MARK: - Default parameters
 
 extension ToolName {
-    /// Embedding routers select a tool but cannot extract its parameters
-    /// from the request — that's the LLM's job in the hybrid sample.
-    /// Neutral defaults keep the routed call renderable and executable;
-    /// free-text arguments fall back to the raw query.
     static func withDefaultArguments(named displayName: String, query: String) -> ToolName? {
         switch displayName {
         case "list_transactions": .listTransactions(days: 7)
@@ -154,9 +98,6 @@ extension ToolName {
         case "bank_statement": .bankStatement(month: "last month", account: .checking)
         case "credit_score": .creditScore
         case "get_location": .getLocation
-        // The embedding router selects names without arguments, so these
-        // are placeholder pairs that keep the call renderable — the
-        // hybrid path gets real coordinates from get_location instead.
         case "find_nearest_branch": .findNearestBranch(latitude: 0, longitude: 0)
         case "find_nearest_atm": .findNearestATM(latitude: 0, longitude: 0)
         case "fees_and_charges": .feesAndCharges(account: .all)
@@ -167,13 +108,8 @@ extension ToolName {
         case "card_limits": .cardLimits(card: .all)
         case "reward_points": .rewardPoints
         case "get_dispute_status": .disputeStatus(merchant: "all")
-        // Placeholder, like the coordinate pairs above: the embedding
-        // router names tools without arguments, and a real ID only exists
-        // once find_nearest_branch has run.
         case "branch_hours": .branchHours(branchID: "")
         case "interest_earned": .interestEarned(account: .all)
-        // No case for "none": the index only holds real tools, so an
-        // unrecognized name means abstain (nil → empty calls → cloud).
         default: nil
         }
     }

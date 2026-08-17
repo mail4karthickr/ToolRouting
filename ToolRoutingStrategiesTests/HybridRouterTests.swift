@@ -214,7 +214,7 @@ struct HybridAnswerEvaluation: Evaluation {
     var onSubject: (@Sendable (String, BankingAnswer) -> Void)?
 
     func subject(from sample: ModelSample<BankingAnswer>) async throws -> ModelSubject<BankingAnswer> {
-        let router = await HybridRouter()
+        let router = await ChatAgent()
         do {
             let result = try await router.route(sample.promptDescription)
             let answer = BankingAnswer(
@@ -674,6 +674,7 @@ struct HybridRouterTests {
         // as the real number — the whole risk of running a batch is a
         // partial score being copied into a decision.
         if let batch = Self.batch {
+            
             print("""
                 ⚠️ BATCH RUN — samples \(batch.lowerBound)..<\(batch.upperBound) of \(Self.datasetName) \
                 (\(Self.samples.count) of 60). A batch is not a small full run: the 95% interval is \

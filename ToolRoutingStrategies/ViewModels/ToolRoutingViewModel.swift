@@ -8,15 +8,12 @@ import Observation
 // the hybrid pipeline, and rewrites the assistant's turn in place as the
 // pipeline reports progress and the answer streams in.
 //
-// Every request goes through HybridRouter. MiniLMRouter and LLMRouter
-// still exist as its two stages, and the evals still run them alone to
-// measure what each contributes, but they are not user-facing choices:
-// the embedding stage can't parameterize a call and the LLM stage alone
-// pays the whole catalog in its prompt, so neither is a strategy anyone
-// would pick for an actual question.
+// Every request goes through ChatAgent. MiniLMRouter and LLMRouter still
+// exist as its two routing stages, and the evals run them alone to
+// measure what each contributes, but they are not user-facing choices.
 //
-// TIMING IS MEASURED HERE, from the send, and not inside the router.
-// The router can only see its own stages; the number that matters is the
+// TIMING IS MEASURED HERE, from the send, and not inside the agent.
+// The agent can only see its own stages; the number that matters is the
 // one that starts when the user's finger leaves the button. Anything
 // this class does before calling `route` is part of the wait too, and
 // measuring from in here is the only way that stays true.
@@ -30,7 +27,7 @@ final class ToolRoutingViewModel {
 
     /// Long-lived, so its warmed session and built index survive across
     /// requests.
-    private let router = HybridRouter()
+    private let router = ChatAgent()
 
     var strategyName: String { router.strategyName }
     var unavailabilityMessage: String? { router.unavailabilityMessage }
