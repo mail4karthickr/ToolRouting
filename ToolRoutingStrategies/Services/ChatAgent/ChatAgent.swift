@@ -121,39 +121,6 @@ final class ChatAgent {
             )
         }
 
-        if LLMRouter.asksForAnAction(in: query) {
-            let note = """
-                The request asks for something to be DONE, and every tool here only reads. \
-                A request that mixes an action with a lookup goes to the cloud whole rather \
-                than half-served — answering the part that works would tell the customer the \
-                rest of it happened.
-                """
-            recordSelection([note])
-            return RoutingResult(
-                strategyName: strategyName,
-                reasoning: [plan.reasoning, note].filter { !$0.isEmpty }.joined(separator: " · "),
-                calls: [RoutedCall(tool: ToolName.none, confidence: nil)],
-                trace: trace
-            )
-        }
-
-        if plan.toolNames.contains(where: Self.locationTools.contains),
-           LLMRouter.namesAPlace(in: query) {
-            let note = """
-                The question asks about a place it names rather than where the user is, and \
-                the location tools only reach the user's own coordinates — nothing turns a \
-                named place into a latitude. The whole request goes to the cloud rather \
-                than answering it from the wrong location.
-                """
-            recordSelection([note])
-            return RoutingResult(
-                strategyName: strategyName,
-                reasoning: [plan.reasoning, note].filter { !$0.isEmpty }.joined(separator: " · "),
-                calls: [RoutedCall(tool: ToolName.none, confidence: nil)],
-                trace: trace
-            )
-        }
-
         let scoreByTool = Dictionary(shortlist.map { ($0.toolName, Double($0.score)) }, uniquingKeysWith: max)
         let routedCalls = LLMRouter.routedCalls(for: plan, query: query, scores: scoreByTool)
 
@@ -203,12 +170,6 @@ final class ChatAgent {
             )
         }
     }
-
-    private static let locationTools: Set<String> = [
-        ToolName.getLocation.displayName,
-        ToolName.findNearestATM(latitude: 0, longitude: 0).displayName,
-        ToolName.findNearestBranch(latitude: 0, longitude: 0).displayName
-    ]
 
     private func stage(
         from retrieval: MiniLMRouter.Retrieval,

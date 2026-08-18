@@ -54,12 +54,6 @@ final class LLMRouter {
     }
 
     // MARK: - Selection
-
-    /// `reasoning` is always part of the schema: the model works out what the
-    /// query asks for before it names a tool, and that ordering is what makes
-    /// the selection accurate. A guardrail trip is therefore not retried
-    /// without it — a pick made blind is worth less than an escalation, and
-    /// the caller already treats a thrown refusal as a route to the cloud.
     func select(_ query: String, from candidates: [ToolDefinition]) async throws -> RoutingPlan {
         let session = warmSession()
         session.transcript = baseline
@@ -124,67 +118,6 @@ final class LLMRouter {
             return false
         }
     }
-
-    // MARK: - Query heuristics
-
-    nonisolated static func namesAPlace(in query: String) -> Bool {
-        let lowercased = query.lowercased()
-        if Self.areaWords.contains(where: { lowercased.contains($0) }) { return true }
-
-        let words = query.split(whereSeparator: \.isWhitespace)
-        if words.contains(where: { word in
-            let bare = word.trimmingCharacters(in: CharacterSet(charactersIn: ".,?!;:()"))
-            return bare.count == 5 && bare.allSatisfy(\.isNumber)
-        }) {
-            return true
-        }
-
-        for match in query.matches(of: /\b(?:in|near|around|close to|by)\s+(?:the\s+)?([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*)/) {
-            let named = String(match.output.1).lowercased()
-            if Self.notPlaces.contains(where: { named.contains($0) }) { continue }
-            return true
-        }
-        return false
-    }
-
-    nonisolated static func asksForAnAction(in query: String) -> Bool {
-        let words = query
-            .lowercased()
-            .split(whereSeparator: { !$0.isLetter && $0 != "'" })
-            .map(String.init)
-        guard let first = words.first else { return false }
-
-        if actionVerbs.contains(first) { return true }
-        if first == "set", words.count > 1, words[1] == "up" { return true }
-
-        for (index, word) in words.enumerated() where index > 0 {
-            let previous = words[index - 1]
-            guard actionIntroducers.contains(previous) else { continue }
-            if actionVerbs.contains(word) { return true }
-            if word == "set", index + 1 < words.count, words[index + 1] == "up" { return true }
-        }
-        return false
-    }
-
-    private static let areaWords = ["downtown", "uptown", "midtown", "city centre", "city center"]
-
-    private static let notPlaces = [
-        "branch", "atm", "bank", "cash machine",
-        "january", "february", "march", "april", "may", "june", "july",
-        "august", "september", "october", "november", "december",
-        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
-    ]
-
-    private static let actionVerbs: Set<String> = [
-        "freeze", "block", "unblock", "transfer", "send", "wire", "pay",
-        "cancel", "stop", "dispute", "report", "replace", "order",
-        "increase", "raise", "lower", "decrease", "open", "close",
-        "change", "update", "apply", "activate", "deactivate", "schedule"
-    ]
-
-    private static let actionIntroducers: Set<String> = [
-        "and", "then", "also", "please", "to", "now", "you"
-    ]
 
     // MARK: - Output schema
 
