@@ -15,7 +15,7 @@ struct MockBankAPIClient: BankAPIClient {
         Self.transactions.filter { $0.merchant.localizedCaseInsensitiveContains(merchant) }
     }
 
-    func routingNumber(accountType: String) async throws -> String {
+    func routingNumber() async throws -> String {
         "011000000"
     }
 
@@ -297,6 +297,18 @@ struct MockBankAPIClient: BankAPIClient {
 
     // MARK: Mock data
 
+    /// Three months of recurring activity rather than the dozen-transaction
+    /// snapshot this replaced, so a question spanning months — "compare my
+    /// Starbucks spend over the last three months" — has real month-to-month
+    /// variation to reason over instead of one data point.
+    ///
+    /// `day` offsets are chosen so the SAME slot repeats roughly a month
+    /// apart (`n`, `n + 30`, `n + 60`) — recognizably "this month", "last
+    /// month", "two months ago" — while `search_transactions` still returns
+    /// every matching row regardless of date, unbounded. Amounts vary
+    /// per-occurrence, by hand, rather than by any random source: this is
+    /// grounding data other tests and MockGroundTruth compute expected
+    /// figures FROM, so every figure needs to be exact and reproducible.
     private static let transactions: [Transaction] = {
         let calendar = Calendar.current
 
@@ -304,19 +316,76 @@ struct MockBankAPIClient: BankAPIClient {
             calendar.date(byAdding: .day, value: -days, to: .now) ?? .now
         }
 
-        return [
-            Transaction(date: daysAgo(0), merchant: "Starbucks", category: "Dining", account: "Checking", amount: -6.45),
-            Transaction(date: daysAgo(1), merchant: "Amazon", category: "Shopping", account: "Credit Card", amount: -82.19),
-            Transaction(date: daysAgo(1), merchant: "Shell Gas Station", category: "Gas", account: "Credit Card", amount: -48.30),
-            Transaction(date: daysAgo(2), merchant: "Whole Foods Market", category: "Groceries", account: "Checking", amount: -114.62),
-            Transaction(date: daysAgo(3), merchant: "Payroll — ACME Corp", category: "Income", account: "Checking", amount: 2450.00),
-            Transaction(date: daysAgo(4), merchant: "Netflix", category: "Entertainment", account: "Credit Card", amount: -15.49),
-            Transaction(date: daysAgo(5), merchant: "Monthly Service Fee", category: "Bank Fees", account: "Checking", amount: -12.00),
-            Transaction(date: daysAgo(6), merchant: "Uber", category: "Transport", account: "Credit Card", amount: -23.75),
-            Transaction(date: daysAgo(8), merchant: "Transfer to Savings", category: "Transfers", account: "Checking", amount: -500.00),
-            Transaction(date: daysAgo(8), merchant: "Transfer from Checking", category: "Transfers", account: "Savings", amount: 500.00),
-            Transaction(date: daysAgo(10), merchant: "Apple.com", category: "Subscriptions", account: "Credit Card", amount: -9.99),
-            Transaction(date: daysAgo(12), merchant: "PG&E — Electricity", category: "Utilities", account: "Checking", amount: -96.40)
+        func txns(
+            _ merchant: String, _ category: String, _ account: String,
+            _ entries: [(day: Int, amount: Decimal)]
+        ) -> [Transaction] {
+            entries.map {
+                Transaction(date: daysAgo($0.day), merchant: merchant, category: category, account: account, amount: $0.amount)
+            }
+        }
+
+        // An array of groups, not a `+`-chained expression: Swift's type
+        // checker choked on the chain ("unable to type-check this
+        // expression in reasonable time") once enough merchants were
+        // added, because every `+` re-opens overload resolution across
+        // the whole accumulated expression. Each `txns(...)` call here
+        // type-checks independently instead.
+        let groups: [[Transaction]] = [
+            txns("Payroll — ACME Corp", "Income", "Checking", [
+                (3, 2450.00), (17, 2450.00), (33, 2450.00), (47, 2450.00), (63, 2450.00), (77, 2450.00)
+            ]),
+            txns("Starbucks", "Dining", "Checking", [
+                (2, -6.45), (9, -5.90), (16, -7.10), (23, -6.75),
+                (32, -6.20), (39, -5.50), (46, -7.05), (53, -6.60),
+                (62, -6.85), (69, -5.95), (76, -7.20), (83, -6.40)
+            ]),
+            txns("Chipotle", "Dining", "Credit Card", [
+                (5, -12.40), (19, -13.75), (35, -12.90), (49, -14.10), (65, -13.25), (79, -12.60)
+            ]),
+            txns("Sweetgreen", "Dining", "Credit Card", [(11, -14.85), (41, -15.20), (71, -14.50)]),
+            txns("Shake Shack", "Dining", "Credit Card", [(24, -18.90), (54, -19.40), (84, -17.75)]),
+            txns("Amazon", "Shopping", "Credit Card", [
+                (1, -82.19), (20, -34.50), (31, -56.30), (50, -27.85), (61, -91.40), (80, -42.15)
+            ]),
+            txns("Walmart", "Shopping", "Checking", [
+                (6, -58.20), (21, -73.45), (36, -64.10), (51, -49.75), (66, -70.90), (81, -55.30)
+            ]),
+            txns("Target", "Shopping", "Credit Card", [(13, -45.60), (43, -38.90), (73, -52.10)]),
+            txns("Best Buy", "Shopping", "Credit Card", [(18, -249.99)]),
+            txns("Whole Foods Market", "Groceries", "Checking", [
+                (2, -114.62), (16, -98.30), (28, -121.45),
+                (32, -105.80), (46, -110.25), (58, -99.60),
+                (62, -118.90), (76, -102.40), (88, -107.15)
+            ]),
+            txns("Trader Joe's", "Groceries", "Checking", [
+                (9, -64.30), (23, -58.75), (39, -61.20), (53, -55.90), (69, -63.45), (83, -59.80)
+            ]),
+            txns("Safeway", "Groceries", "Checking", [(14, -72.50), (44, -68.90), (74, -75.30)]),
+            txns("Shell Gas Station", "Gas", "Credit Card", [
+                (4, -48.30), (18, -52.10), (34, -45.75), (48, -50.90), (64, -49.60), (78, -53.25)
+            ]),
+            txns("Chevron", "Gas", "Credit Card", [(25, -46.80), (55, -44.20), (85, -47.90)]),
+            txns("Uber", "Transport", "Credit Card", [
+                (6, -23.75), (20, -18.40), (36, -21.90), (50, -16.75), (66, -25.30), (80, -19.60)
+            ]),
+            txns("Lyft", "Transport", "Credit Card", [(12, -15.20), (42, -17.85), (72, -14.60)]),
+            txns("Netflix", "Entertainment", "Credit Card", [(4, -15.49), (34, -15.49), (64, -15.49)]),
+            txns("Spotify", "Entertainment", "Credit Card", [(8, -10.99), (38, -10.99), (68, -10.99)]),
+            txns("AMC Theatres", "Entertainment", "Credit Card", [(57, -32.50)]),
+            txns("Apple.com", "Subscriptions", "Credit Card", [(10, -9.99), (40, -9.99), (70, -9.99)]),
+            txns("iCloud+", "Subscriptions", "Credit Card", [(10, -2.99), (40, -2.99), (70, -2.99)]),
+            txns("Adobe Creative Cloud", "Subscriptions", "Credit Card", [(15, -54.99), (45, -54.99), (75, -54.99)]),
+            txns("PG&E — Electricity", "Utilities", "Checking", [(12, -96.40), (42, -89.75), (72, -104.20)]),
+            txns("Comcast — Internet", "Utilities", "Checking", [(17, -79.99), (47, -79.99), (77, -79.99)]),
+            txns("Monthly Service Fee", "Bank Fees", "Checking", [(5, -12.00), (35, -12.00), (65, -12.00)]),
+            txns("Planet Fitness", "Health & Fitness", "Checking", [(7, -24.99), (37, -24.99), (67, -24.99)]),
+            txns("CVS Pharmacy", "Health & Fitness", "Credit Card", [(19, -28.40), (49, -15.60), (79, -42.30)]),
+            txns("Airbnb", "Travel", "Credit Card", [(55, -340.00)]),
+            txns("Delta Airlines", "Travel", "Credit Card", [(56, -410.00)]),
+            txns("Transfer to Savings", "Transfers", "Checking", [(8, -500.00), (38, -500.00), (68, -500.00)]),
+            txns("Transfer from Checking", "Transfers", "Savings", [(8, 500.00), (38, 500.00), (68, 500.00)])
         ]
+        return groups.flatMap { $0 }
     }()
 }

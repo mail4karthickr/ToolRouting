@@ -71,7 +71,7 @@ enum MockGroundTruth {
             case "account_balance":
                 return try await client.accountBalance(accountType: fallback(argument, "all"))
             case "routing_number":
-                return "Routing number: \(try await client.routingNumber(accountType: fallback(argument, "checking")))"
+                return "Routing number: \(try await client.routingNumber())"
             case "account_number":
                 return "Account number: \(try await client.accountNumber(accountType: fallback(argument, "checking")))"
             case "card_number":
@@ -90,13 +90,13 @@ enum MockGroundTruth {
             // return" is the drift this file exists to prevent.
             case "fees_and_charges":
                 return try await FeesAndChargesTool(client: client)
-                    .call(arguments: AccountArgument(account: fallback(argument, "all")))
+                    .call(arguments: .init(account: account(argument)))
             case "pending_payments":
                 return try await PendingPaymentsTool(client: client)
-                    .call(arguments: AccountArgument(account: fallback(argument, "all")))
+                    .call(arguments: .init(account: account(argument)))
             case "scheduled_payments":
                 return try await ScheduledPaymentsTool(client: client)
-                    .call(arguments: AccountArgument(account: fallback(argument, "all")))
+                    .call(arguments: .init(account: account(argument)))
             case "bank_statement":
                 // "all" rather than "checking": the dataset's single argument slot
                 // carries the PERIOD, so the account was never expressed here.
@@ -171,5 +171,18 @@ enum MockGroundTruth {
 
     private static func fallback(_ argument: String, _ standIn: String) -> String {
         argument.trimmingCharacters(in: .whitespaces).isEmpty ? standIn : argument
+    }
+
+    /// The dataset's argument slot is free text; the tools take a closed
+    /// set. Anything unrecognised — the empty slot included — is `all`,
+    /// which is also what these three tools return whatever they are
+    /// handed, so a mismatch here cannot silently narrow the grounding.
+    private static func account(_ argument: String) -> AccountType {
+        switch argument.lowercased() {
+        case let value where value.contains("check"): .checking
+        case let value where value.contains("sav"): .savings
+        case let value where value.contains("credit"): .creditCard
+        default: .all
+        }
     }
 }

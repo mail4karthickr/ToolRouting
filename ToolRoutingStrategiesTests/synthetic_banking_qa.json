@@ -526,15 +526,13 @@
     },
     "output": {
       "value": {
-        "answer": "Your credit score is 742.",
-        "arguments": [
-          ""
-        ],
+        "answer": "",
+        "arguments": [],
         "executedTools": [],
         "orderMatters": false,
         "toolOutput": "",
         "tools": [
-          "credit_score"
+          "none"
         ]
       }
     }

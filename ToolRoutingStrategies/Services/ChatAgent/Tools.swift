@@ -11,17 +11,41 @@ private func catalogEntry(_ displayName: String) -> ToolDefinition {
 // MARK: - Shared arguments
 
 @Generable
-struct AccountArgument {
-    @Guide(description: "Which account: checking, savings, credit card, or all")
-    var account: String
+struct CardNumberArgument {
+    @Guide(description: """
+        Which card's number to return. When the question names a card, use THAT card — "my \
+        credit card number" is credit, "my debit card" is debit. Use `all` when it names \
+        none, as in "I need my card number"; that returns both numbers.
+        """)
+    var card: CardType
 }
 
+/// The limits tool's own argument, and the split from `CardNumberArgument`
+/// IS the fix.
+///
+/// One `CardArgument` served both card tools until 2026-08-19, so both
+/// inherited a guide whose only worked examples were card NUMBER
+/// questions. A limits question matched neither, and "limit" collocates
+/// with "credit limit" more strongly than with anything else in this
+/// domain — so on a question naming no card the model reached for
+/// `credit`, got the one branch of the client with no withdrawal limit in
+/// it, and reported a spending limit instead. Reproducible, four runs out
+/// of four (eval sample 7).
+///
+/// A shared argument type is a shared PROMPT. Two tools whose parameters
+/// happen to have the same shape do not have the same question to answer
+/// about them, and the one with no examples of its own borrows the
+/// other's.
 @Generable
-struct CardArgument {
+struct CardLimitsArgument {
     @Guide(description: """
-        Which card the question is about. When it names one, use THAT card — "my credit card \
-        number" is credit, "my debit card" is debit. Use `all` ONLY when the question names no \
-        card at all, as in "what's my card limit?".
+        Which card's limits to return. `all` is the DEFAULT and the right answer whenever the \
+        question does not name a card: it returns the credit limit, the daily spending limit \
+        and the daily ATM withdrawal limit together, so it covers any limit question. Name a \
+        card ONLY when the question does — "my credit card limit" is credit, "the limit on my \
+        debit card" is debit. NAMING A KIND OF LIMIT IS NOT NAMING A CARD: which limit is \
+        asked about tells you nothing about which card holds it, so those questions are still \
+        `all`.
         """)
     var card: CardType
 }
@@ -158,10 +182,17 @@ struct AccountBalanceTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("account_balance").displayName }
     var description: String { catalogEntry("account_balance").description }
-    typealias Arguments = AccountArgument
 
-    func call(arguments: AccountArgument) async throws -> String {
-        try await client.accountBalance(accountType: arguments.account)
+    @Generable
+    struct BalanceRequest {
+        @Guide(description: """
+            Which account's balance to return. Use `all` when the question names no account — "what's my balance?" names none, and `all` returns checking, savings and the credit card together. Name one ONLY when the question does: "my savings balance" is savings.
+            """)
+        var account: AccountType
+    }
+
+    func call(arguments: BalanceRequest) async throws -> String {
+        try await client.accountBalance(accountType: arguments.account.apiValue)
     }
 }
 
@@ -169,10 +200,15 @@ struct RoutingNumberTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("routing_number").displayName }
     var description: String { catalogEntry("routing_number").description }
-    typealias Arguments = AccountArgument
+    /// NO ARGUMENT, and that is a fact about routing numbers rather than a
+    /// simplification. A routing number identifies the BANK, not one of the
+    /// customer's accounts — every account here shares 011000000. Asking the
+    /// model which account it wants is a question with no right answer: it
+    /// costs prompt tokens, and any value it picks changes nothing.
+    typealias Arguments = NoArguments
 
-    func call(arguments: AccountArgument) async throws -> String {
-        try await client.routingNumber(accountType: arguments.account)
+    func call(arguments: NoArguments) async throws -> String {
+        try await client.routingNumber()
     }
 }
 
@@ -180,10 +216,17 @@ struct AccountNumberTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("account_number").displayName }
     var description: String { catalogEntry("account_number").description }
-    typealias Arguments = AccountArgument
 
-    func call(arguments: AccountArgument) async throws -> String {
-        try await client.accountNumber(accountType: arguments.account)
+    @Generable
+    struct NumberRequest {
+        @Guide(description: """
+            Which account's number to return. Use `all` when the question names no account. Name one ONLY when the question does: "my savings account number" is savings.
+            """)
+        var account: AccountType
+    }
+
+    func call(arguments: NumberRequest) async throws -> String {
+        try await client.accountNumber(accountType: arguments.account.apiValue)
     }
 }
 
@@ -212,10 +255,17 @@ struct InterestEarnedTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("interest_earned").displayName }
     var description: String { catalogEntry("interest_earned").description }
-    typealias Arguments = AccountArgument
 
-    func call(arguments: AccountArgument) async throws -> String {
-        try await client.interestEarned(accountType: arguments.account)
+    @Generable
+    struct InterestRequest {
+        @Guide(description: """
+            Which account's interest to report. Interest is earned on deposit accounts, so a question that names no account is asking about savings or about everything — use `all` rather than guessing one.
+            """)
+        var account: AccountType
+    }
+
+    func call(arguments: InterestRequest) async throws -> String {
+        try await client.interestEarned(accountType: arguments.account.apiValue)
     }
 }
 
@@ -223,10 +273,17 @@ struct FeesAndChargesTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("fees_and_charges").displayName }
     var description: String { catalogEntry("fees_and_charges").description }
-    typealias Arguments = AccountArgument
 
-    func call(arguments: AccountArgument) async throws -> String {
-        let fees = try await client.feesAndCharges(accountType: arguments.account)
+    @Generable
+    struct FeesRequest {
+        @Guide(description: """
+            Which account's fees to list. Use `all` when the question names no account — "what fees did I pay" names none and is asking for all of them.
+            """)
+        var account: AccountType
+    }
+
+    func call(arguments: FeesRequest) async throws -> String {
+        let fees = try await client.feesAndCharges(accountType: arguments.account.apiValue)
         return ToolOutput.sentence(
             fees,
             lead: "You paid",
@@ -241,9 +298,9 @@ struct CardNumberTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("card_number").displayName }
     var description: String { catalogEntry("card_number").description }
-    typealias Arguments = CardArgument
+    typealias Arguments = CardNumberArgument
 
-    func call(arguments: CardArgument) async throws -> String {
+    func call(arguments: CardNumberArgument) async throws -> String {
         try await client.cardNumber(cardType: arguments.card.apiValue)
     }
 }
@@ -252,9 +309,9 @@ struct CardLimitsTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("card_limits").displayName }
     var description: String { catalogEntry("card_limits").description }
-    typealias Arguments = CardArgument
+    typealias Arguments = CardLimitsArgument
 
-    func call(arguments: CardArgument) async throws -> String {
+    func call(arguments: CardLimitsArgument) async throws -> String {
         try await client.cardLimits(cardType: arguments.card.apiValue)
     }
 }
@@ -265,10 +322,17 @@ struct PendingPaymentsTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("pending_payments").displayName }
     var description: String { catalogEntry("pending_payments").description }
-    typealias Arguments = AccountArgument
 
-    func call(arguments: AccountArgument) async throws -> String {
-        let payments = try await client.pendingPayments(accountType: arguments.account)
+    @Generable
+    struct PendingRequest {
+        @Guide(description: """
+            Which account's pending payments to list. Use `all` when the question names no account; pending payments are rarely asked about per-account.
+            """)
+        var account: AccountType
+    }
+
+    func call(arguments: PendingRequest) async throws -> String {
+        let payments = try await client.pendingPayments(accountType: arguments.account.apiValue)
         return ToolOutput.sentence(
             payments,
             lead: "These payments are pending and still processing:",
@@ -281,10 +345,17 @@ struct ScheduledPaymentsTool: Tool {
     let client: any BankAPIClient
     var name: String { catalogEntry("scheduled_payments").displayName }
     var description: String { catalogEntry("scheduled_payments").description }
-    typealias Arguments = AccountArgument
 
-    func call(arguments: AccountArgument) async throws -> String {
-        let payments = try await client.scheduledPayments(accountType: arguments.account)
+    @Generable
+    struct ScheduledRequest {
+        @Guide(description: """
+            Which account's scheduled payments to list. Use `all` when the question names no account; scheduled payments are rarely asked about per-account.
+            """)
+        var account: AccountType
+    }
+
+    func call(arguments: ScheduledRequest) async throws -> String {
+        let payments = try await client.scheduledPayments(accountType: arguments.account.apiValue)
         return ToolOutput.sentence(
             payments,
             lead: "These payments are scheduled to go out:",
@@ -418,122 +489,6 @@ struct RewardPointsTool: Tool {
     }
 }
 
-// MARK: - Arithmetic (not bound — no session hands this to the model)
-
-final class ComputeTool: Tool, @unchecked Sendable {
-    let name = "compute"
-    let description = """
-        Calculate a figure from numbers other tools have already returned: \
-        a total, a difference, a percentage, or a comparison. Use this \
-        whenever the answer needs a number no tool returned directly. \
-        Never do the arithmetic yourself.
-        """
-
-    @Generable
-    enum Operation {
-        case sum
-        case difference
-        case percentage
-        case compare
-    }
-
-    @Generable
-    enum Style {
-        case currency
-        case percent
-        case plain
-    }
-
-    @Generable
-    struct Arguments {
-        @Guide(description: "What to calculate")
-        var operation: Operation
-
-        @Guide(description: """
-            The figures to use, copied character for character from the tool \
-            results, for example ["$2,340.12", "$1,850.00"]
-            """)
-        var operands: [String]
-
-        @Guide(description: "How to format the result: currency, percent, or plain")
-        var style: Style
-
-        @Guide(description: "What the result means, for example 'total spent at Amazon'")
-        var label: String
-
-        init(operation: Operation, operands: [String], style: Style, label: String) {
-            self.operation = operation
-            self.operands = operands
-            self.style = style
-            self.label = label
-        }
-    }
-
-    func call(arguments: Arguments) async throws -> String {
-        var values: [Decimal] = []
-        for operand in arguments.operands {
-            guard let value = Self.parse(operand) else {
-                return """
-                    Could not read a number from '\(operand)'. Pass a figure exactly \
-                    as a tool returned it.
-                    """
-            }
-            values.append(value)
-        }
-
-        switch arguments.operation {
-        case .sum:
-            guard !values.isEmpty else { return "No figures to add." }
-            return format(values.reduce(0, +), arguments)
-
-        case .difference:
-            guard values.count == 2 else {
-                return "A difference needs exactly two figures; \(values.count) were given."
-            }
-            return format(values[0] - values[1], arguments)
-
-        case .percentage:
-            guard values.count == 2 else {
-                return "A percentage needs exactly two figures; \(values.count) were given."
-            }
-            guard values[1] != 0 else { return "Cannot take a percentage of zero." }
-            return format(values[0] / values[1] * 100, arguments)
-
-        case .compare:
-            guard values.count == 2 else {
-                return "A comparison needs exactly two figures; \(values.count) were given."
-            }
-            let surplus = values[0] - values[1]
-            let covers = surplus >= 0
-            return """
-                \(arguments.label): \(money(values[0])) \(covers ? "is enough to cover" : "falls short of") \
-                \(money(values[1])), a \(covers ? "surplus" : "shortfall") of \(money(abs(surplus))).
-                """
-        }
-    }
-
-    private static func parse(_ text: String) -> Decimal? {
-        let digits = text.filter { $0.isNumber || $0 == "." || $0 == "-" }
-        guard digits.contains(where: \.isNumber) else { return nil }
-        return Decimal(string: digits)
-    }
-
-    private func format(_ value: Decimal, _ arguments: Arguments) -> String {
-        switch arguments.style {
-        case .currency:
-            "\(arguments.label): \(money(value))"
-        case .percent:
-            "\(arguments.label): \(value.formatted(.number.precision(.fractionLength(0...1))))%"
-        case .plain:
-            "\(arguments.label): \(value.formatted(.number.precision(.fractionLength(0...2))))"
-        }
-    }
-
-    private func money(_ value: Decimal) -> String {
-        value.formatted(.currency(code: "USD"))
-    }
-}
-
 // MARK: - Registry
 
 enum BankToolRegistry {
@@ -563,6 +518,7 @@ enum BankToolRegistry {
         case "get_dispute_status": DisputeStatusTool(client: client)
         case "branch_hours": BranchHoursTool(client: client)
         case "interest_earned": InterestEarnedTool(client: client)
+        case "calculator": CalculatorTool()
         default: nil
         }
     }

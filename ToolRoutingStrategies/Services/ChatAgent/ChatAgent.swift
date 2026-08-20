@@ -21,6 +21,17 @@ final class ChatAgent {
 
     private var history: [Transcript.Entry] = []
     private static let historyEntryLimit = 12
+
+    /// Turns where a tool was routed and bound but never invoked, leaving
+    /// the answer with no data behind it. Should be zero; anything else is
+    /// the "bal?" defect recurring, and nothing now papers over it.
+    ///
+    /// Static because the evaluation builds a fresh `ChatAgent` per
+    /// sample, so a per-instance count would be zero or one and never a
+    /// run's total.
+    private(set) static var turnsWithUncalledTools = 0
+
+    static func resetUncalledToolCount() { turnsWithUncalledTools = 0 }
     private(set) var sessionsBuilt = 0
 
     init(client: any BankAPIClient = MockBankAPIClient()) {
@@ -72,13 +83,14 @@ final class ChatAgent {
         do {
             plan = try await selector.select(query, from: candidateTools)
         } catch where LLMRouter.isDecliningToRoute(error) {
+            let reason = LLMRouter.declineReason(error) ?? "cause not reported"
             trace.selection = RoutingTrace.SelectionStage(
                 candidates: candidateTools.map(\.displayName),
                 reasoning: nil,
                 route: .noMatch,
                 plannedCalls: [],
                 policyNotes: [
-                    "The on-device model declined to route this request — a guardrail or refusal. Treated as an escalation, exactly like an explicit `none`, rather than surfaced as an error."
+                    "The on-device model declined to route this request — \(reason). Treated as an escalation, exactly like an explicit `none`, rather than surfaced as an error."
                 ],
                 promptTokens: nil,
                 outputTokens: nil,
@@ -86,7 +98,7 @@ final class ChatAgent {
             )
             return RoutingResult(
                 strategyName: strategyName,
-                reasoning: "The on-device model declined to route this request; answering with the cloud model.",
+                reasoning: "The on-device model declined to route this request (\(reason)); answering with the cloud model.",
                 calls: [RoutedCall(tool: ToolName.none, confidence: nil)],
                 trace: trace
             )
@@ -231,32 +243,33 @@ final class ChatAgent {
         }
 
         let runnable = names.filter { BankToolRegistry.tool(named: $0, client: client) != nil }
-        let session = makeSession(for: runnable, tools: tools)
-        var answer = try await respond(in: session, to: query, onUpdate: onUpdate)
+        let session = makeSession(tools: tools)
+        let turnPrompt = AgentPrompt.request(for: query, tools: runnable)
+        let answer = try await respond(in: session, to: turnPrompt, onUpdate: onUpdate)
 
-        var repairPrompt: String?
-        let missing = runnable.filter { !answer.executedTools.contains($0) }
-        if !missing.isEmpty {
-            let prompt = AgentPrompt.repair(for: query, missing: missing)
-            repairPrompt = prompt
-            let repaired = try await respond(
-                in: session,
-                to: prompt,
-                onUpdate: onUpdate,
-                timeToFirstToken: answer.timeToFirstToken
-            )
-            answer = repaired.text.isEmpty ? answer : repaired
-        }
+        // NOT REPAIRED — COUNTED. A second pass naming the skipped tool
+        // used to sit here and it worked, which is why it survived so
+        // long: it turned every uncalled tool into a correct answer and
+        // hid the reason. The reason was Stage 3 sending a bare query as
+        // the turn, fixed in `AgentPrompt.request(for:tools:)`, and once
+        // the turn names the tools the second pass has nothing to do.
+        //
+        // What is kept is the DETECTION. This is the condition that made
+        // "bal?" answer from thin air, and it is invisible in a reply —
+        // the figures simply look like figures. Counting it costs a
+        // filter over a list of at most four names and means the next
+        // occurrence shows up as a number in an eval run rather than as a
+        // fabricated balance nobody noticed.
+        Self.turnsWithUncalledTools += runnable.contains(where: { !answer.executedTools.contains($0) }) ? 1 : 0
 
-        remember(session.transcript, discarding: repairPrompt)
+        remember(session.transcript, turn: (sent: turnPrompt, asked: query))
         return answer
     }
 
     private func respond(
         in session: LanguageModelSession,
         to query: String,
-        onUpdate: (RoutingUpdate) -> Void,
-        timeToFirstToken carriedTimeToFirstToken: Duration? = nil
+        onUpdate: (RoutingUpdate) -> Void
     ) async throws -> Answer {
         let clock = ContinuousClock()
         let start = clock.now
@@ -288,14 +301,14 @@ final class ChatAgent {
             executedTools: invocations.map(\.toolName),
             invocations: invocations,
             transcript: session.transcript,
-            timeToFirstToken: carriedTimeToFirstToken ?? timeToFirstToken,
+            timeToFirstToken: timeToFirstToken,
             promptTokens: promptTokens
         )
     }
 
-    private func makeSession(for names: [String], tools: [any Tool]) -> LanguageModelSession {
+    private func makeSession(tools: [any Tool]) -> LanguageModelSession {
         let instructions = Transcript.Instructions(
-            segments: [.text(Transcript.TextSegment(content: AgentPrompt.system(for: names)))],
+            segments: [.text(Transcript.TextSegment(content: AgentPrompt.system))],
             toolDefinitions: tools.map { Transcript.ToolDefinition(tool: $0) }
         )
         sessionsBuilt += 1
@@ -306,7 +319,10 @@ final class ChatAgent {
         )
     }
 
-    private func remember(_ transcript: Transcript, discarding repairPrompt: String? = nil) {
+    private func remember(
+        _ transcript: Transcript,
+        turn: (sent: String, asked: String)? = nil
+    ) {
         var kept: [Transcript.Entry] = []
         for entry in transcript {
             switch entry {
@@ -314,8 +330,15 @@ final class ChatAgent {
                 let text = prompt.segments
                     .compactMap { if case .text(let text) = $0 { text.content } else { nil } }
                     .joined(separator: " ")
-                guard text != repairPrompt else {
-                    if case .response = kept.last { kept.removeLast() }
+                // History is a CONVERSATION, so it records what the
+                // customer asked and not the scaffolding this turn wrapped
+                // it in. "Call account_balance now, before writing
+                // anything" is ours, not theirs, and a later turn reading
+                // it back would be reading an instruction as dialogue.
+                if let turn, text == turn.sent {
+                    kept.append(.prompt(Transcript.Prompt(
+                        segments: [.text(Transcript.TextSegment(content: turn.asked))]
+                    )))
                     continue
                 }
                 kept.append(entry)

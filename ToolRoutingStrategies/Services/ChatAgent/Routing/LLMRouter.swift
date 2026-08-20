@@ -109,6 +109,30 @@ final class LLMRouter {
         return "The model selected `none` alongside \(plan.toolNames.filter { $0 != ToolName.none.displayName }.joined(separator: ", ")), which contradicts itself; the whole request goes to the cloud rather than executing half of it."
     }
 
+    /// WHICH of the two declines it was, and whatever the framework said
+    /// about it.
+    ///
+    /// `isDecliningToRoute` treats them identically because the routing
+    /// decision is the same either way — the request goes to the cloud.
+    /// The CAUSES are not: a guardrail violation is the safety filter
+    /// firing on content, a refusal is the model declining the request
+    /// itself. The trace said "a guardrail or refusal" for both, and on
+    /// 2026-08-19 that ambiguity cost an afternoon — the answer turned out
+    /// to be `refusal — May contain sensitive content` on two lookups the
+    /// account holder is entitled to, which is a prompt problem and not a
+    /// filter problem. Worth one line to never guess again.
+    nonisolated static func declineReason(_ error: any Error) -> String? {
+        guard let error = error as? LanguageModelError else { return nil }
+        switch error {
+        case .guardrailViolation(let violation):
+            return "guardrail violation — \(violation.debugDescription)"
+        case .refusal(let refusal):
+            return "refusal — \(refusal.debugDescription)"
+        default:
+            return nil
+        }
+    }
+
     nonisolated static func isDecliningToRoute(_ error: any Error) -> Bool {
         guard let error = error as? LanguageModelError else { return false }
         switch error {

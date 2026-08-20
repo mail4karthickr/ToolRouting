@@ -18,7 +18,7 @@ import FoundationModels
 enum ToolName {
     case listTransactions(days: Int)
     case searchTransactions(merchant: String)
-    case routingNumber(account: AccountType)
+    case routingNumber
     case accountNumber(account: AccountType)
     case cardNumber(card: CardType)
     case bankStatement(month: String, account: AccountType)
@@ -36,6 +36,12 @@ enum ToolName {
     case disputeStatus(merchant: String)
     case branchHours(branchID: String)
     case interestEarned(account: AccountType)
+    /// Computes from figures another tool in the SAME plan already
+    /// returned — never routed alone. Its real operation and operands are
+    /// decided live by the model during execution, not by the router, so
+    /// unlike every other case here it carries no parameters: there is
+    /// nothing meaningful to default them to ahead of time.
+    case calculator
     /// No local tool matches: the request (or a sub-task of it) can't be
     /// served on device, so it goes to the cloud model. Not a failure state.
     case none
@@ -53,7 +59,7 @@ enum AccountType {
 ///
 /// `all` exists because most card questions don't name a card — "what's my
 /// card limit?" names none, and the honest answer covers both. Before it
-/// was a case, the agent still asked for "all": `CardArgument.card` was a
+/// was a case, the agent still asked for "all": the card argument was a
 /// free-text String, the model filled it with a value the guide never
 /// offered, and `MockBankAPIClient.cardLimits` — a ternary on
 /// `contains("credit")` — quietly routed it to the DEBIT branch. The
@@ -140,6 +146,7 @@ extension ToolName {
         case .disputeStatus: "get_dispute_status"
         case .branchHours: "branch_hours"
         case .interestEarned: "interest_earned"
+        case .calculator: "calculator"
         case .none: "none"
         }
     }
@@ -149,7 +156,7 @@ extension ToolName {
         switch self {
         case .listTransactions(let days): "days: \(days)"
         case .searchTransactions(let merchant): "merchant: \(merchant)"
-        case .routingNumber(let account): "account: \(account)"
+        case .routingNumber: nil
         case .accountNumber(let account): "account: \(account)"
         case .cardNumber(let card): "card: \(card)"
         case .bankStatement(let month, let account): "month: \(month), account: \(account)"
@@ -167,6 +174,7 @@ extension ToolName {
         case .disputeStatus(let merchant): "merchant: \(merchant)"
         case .branchHours(let branchID): "branchID: \(branchID)"
         case .interestEarned(let account): "account: \(account)"
+        case .calculator: nil
         case .none: nil
         }
     }

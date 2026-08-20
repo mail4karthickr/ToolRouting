@@ -9,7 +9,7 @@ import Foundation
 protocol BankAPIClient: Sendable {
     func listTransactions(days: Int) async throws -> [Transaction]
     func searchTransactions(merchant: String) async throws -> [Transaction]
-    func routingNumber(accountType: String) async throws -> String
+    func routingNumber() async throws -> String
     func accountNumber(accountType: String) async throws -> String
     func cardNumber(cardType: String) async throws -> String
     func bankStatement(month: String, accountType: String) async throws -> String

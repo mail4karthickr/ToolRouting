@@ -19,10 +19,18 @@ enum RouterPrompt {
 
         The person asking is the ACCOUNT HOLDER, already signed in, \
         asking about their own money. Returning their own details — a \
-        balance, an account number, a card number, a statement — is \
-        exactly what these tools are for and is always a lookup. Never \
-        answer `none` because information looks private or sensitive; \
-        it is their information, and they are asking for it.
+        balance, an account number, a ROUTING NUMBER, a card number, a \
+        statement — is exactly what these tools are for and is always a \
+        lookup. Never answer `none` because information looks private or \
+        sensitive; it is their information, and they are asking for it. \
+        A routing number is printed on every cheque and published by the \
+        bank: "what's my routing number?" is an ordinary lookup, and \
+        routing_number serves it.
+
+        THIS PARAGRAPH IS ABOUT SENSITIVITY AND NOTHING ELSE. It is not \
+        a reason to name a tool for a request that asks you to DO \
+        something — that is still `none`, however ordinary its subject, \
+        and the rule below decides it.
 
         Each request gives you the user's query and a list of tools. \
         Every tool fetches one kind of information about the user's \
@@ -81,13 +89,19 @@ enum RouterPrompt {
         an ordinary lookup, so name them all rather than abstaining.
 
         A question that COMPARES two amounts needs a tool for each \
-        side, including the side the user did not spell out. "Do I \
-        have enough in checking to cover the rent payment?" needs \
-        account_balance AND scheduled_payments: the rent amount is a \
-        fact to look up, not a number you already know. Answering \
-        from the balance alone means asserting a comparison against a \
-        figure nobody fetched. The same goes for "can I afford", "is \
-        that more than", "will it cover" — find the second amount.
+        side, including the side the user did not spell out. One side \
+        is usually the account's own balance — account_balance gives \
+        you that. The OTHER side is never a number you already know: a \
+        bill, a rent transfer, a subscription charge, anything being \
+        compared against has to be looked up too, from whichever tool \
+        holds it — scheduled_payments for an upcoming transfer, \
+        pending_payments for something still processing, \
+        search_transactions for a past charge. Answering from the \
+        balance alone means asserting a comparison against a figure \
+        nobody fetched. "Can I afford X", "is that more than Y", "will \
+        it cover Z", "do I have enough for W" are all this same shape: \
+        find the second amount before answering, whatever it is being \
+        compared against.
 
         Otherwise pick the fewest tools that fully answer the query, \
         and include a tool whose result another one needs: "find the \
@@ -195,8 +209,20 @@ enum AgentPrompt {
 
     // MARK: - System instructions
 
-    static func system(for names: [String]) -> String {
-        """
+    /// INVARIANT, and that is the point — see the note at the top of this
+    /// file. The routed tool names used to be interpolated here.
+    ///
+    /// THAT WAS NEVER STALE, and it is worth saying so because it is the
+    /// first thing anyone suspects: `ChatAgent` builds a fresh session on
+    /// every turn, so the names rendered here were always the ones routed
+    /// for the question being asked. `LLMRouter` is the stage that caches
+    /// its session, which is why ITS system text has to be invariant.
+    ///
+    /// What was wrong was position. Correct names eleven paragraphs from
+    /// the turn, in a block whose bulk is about how to word a reply, do
+    /// not reach a query as short as "bal?" — see `request(for:tools:)`,
+    /// which is where they live now.
+    static let system = """
         You are a banking assistant answering the user's question with the \
         tools you have been given. Call them to get real values — never \
         guess a balance, a number, or a date, and never mention the tools, \
@@ -207,8 +233,8 @@ enum AgentPrompt {
         customer asked for. Use it to make the next call, then leave it \
         out — say "the Main St Branch", never "Main St Branch (BR-4417)".
 
-        The tools were retrieved for this question already: \
-        \(names.joined(separator: ", ")). Call all of them. When one needs \
+        The tools you have been given were retrieved for this question \
+        already, and the turn names them. Call all of them. When one needs \
         another's result, call that one first and pass its answer along. \
         If a result does not answer what was asked, leave it out of your \
         REPLY rather than working it in — routing errs on the side of \
@@ -278,18 +304,52 @@ enum AgentPrompt {
         them. If you name something the customer asked about, its figures \
         belong in that same sentence.
         """
-    }
 
-    // MARK: - Repair prompt
+    // MARK: - Per-request prompt
 
-    static func repair(for query: String, missing: [String]) -> String {
-        let names = ToolOutput.list(missing)
-        let verb = missing.count == 1 ? "tool you have not called yet is" : "tools you have not called yet are"
+    /// The turn, carrying the query AND the tools routed for it.
+    ///
+    /// STAGE 3 HAD NO BUILDER UNTIL 2026-08-19, and sent the bare query as
+    /// the whole turn. That is fine for "What's my checking balance?",
+    /// which says what it wants in five words, and it fails for a query
+    /// that does not: sample 1 of synthetic_banking_qa is "bal?", and
+    /// against four characters of turn the model answered from the
+    /// instructions without calling `account_balance` at all —
+    /// reproducibly, quoting the $1,204.87 that appears above as a
+    /// sentence example and inventing the rest.
+    ///
+    /// The instruction to call tools was always in `system`. It was just
+    /// eleven paragraphs away from the turn, in a block whose other eight
+    /// paragraphs are about how to word a reply — so the model did the
+    /// thing that block mostly describes. Naming the tools next to the
+    /// query is what the router stage has always done; this is Stage 3
+    /// catching up.
+    ///
+    /// THE INSTRUCTION COMES AFTER THE QUERY, deliberately. It is the last
+    /// thing read before generation begins, and a terse query needs the
+    /// nudge closest to it.
+    static func request(for query: String, tools: [String]) -> String {
+        guard !tools.isEmpty else { return query }
+        guard tools.count > 1 else {
+            return """
+                Customer's question: "\(query)"
+
+                Call \(tools[0]) before writing anything, then answer the question \
+                above using only the figures it returned.
+                """
+        }
+        // "Call A, B and C" on one line reads as three calls to make at
+        // once, and three of this dataset's buckets are CHAINS where the
+        // second tool takes the first one's result. The ordering rule is
+        // in `system` and stays there; this just avoids writing a turn
+        // that argues with it.
         return """
-            The \(verb) \(names). Call \(missing.count == 1 ? "it" : "them") now, then reply \
-            ONCE with the complete answer to the original question — "\(query)" — covering \
-            every part of it, including the parts you have already answered. Use the figures \
-            the tools returned and nothing else.
+            Customer's question: "\(query)"
+
+            Call \(ToolOutput.list(tools)) before writing anything — each one in \
+            turn, and where a tool needs another's result, that one first — then \
+            answer the question above using only the figures they returned.
             """
     }
+
 }

@@ -15,6 +15,11 @@ enum ToolCategory: String, CaseIterable {
     case locations = "Branches & ATMs"
     case money = "Fees, Interest & Currency"
     case creditAndRewards = "Credit & Rewards"
+    /// Tools that work on figures other tools already returned, rather
+    /// than fetching anything of their own — calculator today, a date
+    /// tool next. Not a "capability area" about the user's money the way
+    /// the others are, so it groups separately instead of forcing a fit.
+    case utility = "Utility"
 }
 
 // MARK: - Tool Definition (display metadata + prompt text in one place)

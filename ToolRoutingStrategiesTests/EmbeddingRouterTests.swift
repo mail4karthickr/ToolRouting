@@ -30,6 +30,7 @@ Face Hub, so it needs network once.
 
 import Evaluations
 import Foundation
+import FoundationModels
 import Testing
 @testable import ToolRoutingStrategies
 
@@ -228,5 +229,119 @@ struct EmbeddingRouterTests {
         // above 0.5 here means every sample kept at least half its
         // answer — a low bar, and the first run should replace it.
         #expect(result.aggregateValue(.minimum(of: Self.evaluation.recall)) >= 0.5)
+    }
+}
+
+// MARK: - TEMPORARY end-to-end probe (2026-08-19) — delete after diagnosis
+//
+// Checks whether the rewritten compare-two-amounts rule generalizes to
+// wording it has never seen, since the dataset holds exactly one sample
+// for that rule and cannot answer that question on its own. Full pipeline
+// via ChatAgent.route, not just retrieval — the rule lives in Stage 2.
+
+// MARK: - TEMPORARY context-overflow probe (2026-08-19) — delete after diagnosis
+//
+// Runs ChatAgent.route directly, outside the eval harness, so a thrown
+// LanguageModelError.contextSizeExceeded can be caught and read instead
+// of being absorbed into a SubjectInferenceError with no numbers attached.
+// Targets the two samples that overflowed in the 60-sample xcevalresult.
+
+@Suite("Context overflow probe")
+struct ContextOverflowProbeTests {
+    @Test("What actually happens on the queries that overflowed?", arguments: [
+        "What's my credit limit, my credit card number, and my credit score?",
+        "What's my credit score and do I have any pending payments?"
+    ])
+    @MainActor
+    func probeContextOverflow(query: String) async throws {
+        let agent = ChatAgent()
+        do {
+            let result = try await agent.route(query)
+            print("""
+
+                === "\(query)"
+                   SUCCEEDED this run (did not reproduce)
+                   routed: \(result.calls.map(\.tool.displayName).joined(separator: ", "))
+                   executed: \(result.executedTools.joined(separator: ", "))
+                   promptTokens (final turn): \(result.trace.execution?.promptTokens.map(String.init) ?? "?")
+                   answer: \(result.answer ?? "(none)")
+                """)
+        } catch let error as LanguageModelError {
+            if case .contextSizeExceeded(let overflow) = error {
+                print("""
+
+                    === "\(query)"
+                       THREW contextSizeExceeded
+                       contextSize (the model's limit):  \(overflow.contextSize)
+                       tokenCount (what this turn needed): \(overflow.tokenCount)
+                       over by: \(overflow.tokenCount - overflow.contextSize) tokens
+                       debugDescription: \(overflow.debugDescription)
+                    """)
+            } else {
+                print("=== \"\(query)\" threw a different LanguageModelError: \(error)")
+            }
+        } catch {
+            print("=== \"\(query)\" threw a non-LanguageModelError: \(error)")
+        }
+    }
+}
+
+@Suite("Compare-two-amounts probe")
+struct CompareAmountsProbeTests {
+    @Test("Do untested paraphrasings still find the second amount?")
+    @MainActor
+    func rankComparisonParaphrases() async throws {
+        let agent = ChatAgent()
+        let queries = [
+            "Can I afford my gym membership this month?",
+            "Is my checking balance more than the rent I owe?",
+            "Will my balance cover the PG&E bill?"
+        ]
+
+        for query in queries {
+            let result = try await agent.route(query)
+            let tools = result.calls.map(\.tool.displayName).joined(separator: ", ")
+            print("""
+
+                === "\(query)"
+                   tools: \(tools.isEmpty ? "(none)" : tools)
+                   reasoning: \(result.reasoning ?? "(none)")
+                   answer: \(result.answer ?? "(no reply)")
+                """)
+        }
+    }
+}
+
+// MARK: - TEMPORARY retrieval probe (2026-08-19) — delete after diagnosis
+
+@Suite("Retrieval probe")
+struct RetrievalProbeTests {
+    @Test("Where does routing_number rank?")
+    @MainActor
+    func rankRoutingNumberQueries() async throws {
+        let router = MiniLMRouter()
+        let queries = [
+            "What's my routing number?",
+            "routing no",
+            "I need the routing number for a wire transfer",
+            "What's my checking account number and routing number?",
+            "Do I have enough in checking to cover the rent payment?"
+        ]
+
+        for query in queries {
+            let retrieval = try await router.rank(query, topK: 5)
+            print("\n=== \"\(query) \"  (threshold \(router.similarityThreshold), topK 5)")
+            for tool in retrieval.ranked.prefix(8) {
+                let shortlisted = retrieval.shortlist.contains { $0.toolName == tool.toolName }
+                print(String(
+                    format: "   %.4f  %@%@",
+                    tool.score,
+                    tool.toolName,
+                    shortlisted ? "   ← shortlisted" : ""
+                ))
+            }
+            let made = retrieval.shortlist.contains { $0.toolName == "routing_number" }
+            print("   routing_number shortlisted: \(made)")
+        }
     }
 }

@@ -1,33 +1,5 @@
 import SwiftUI
 
-// MARK: - Tool Catalog
-//
-// The full set of app tools available to every routing strategy.
-// Both the UI (tool list) and the routers (prompt/embedding text)
-// read from here, so the two can never drift out of sync.
-//
-// `exampleQueries` DELIBERATELY MIXES TWO REGISTERS, and the order is
-// load-bearing:
-//
-//   first  well-formed sentences — "What is my balance?"
-//   then   how people actually type — "bal?", "this weeks txns"
-//
-// Both halves are embedded. ToolIndex vectorises the description and
-// EACH example separately and scores a tool by its best match, so a
-// colloquial entry raises the ceiling for colloquial phrasing without
-// dragging the tool's other vectors toward it. Sentences alone left a
-// measurable gap: real queries arrive lowercase, abbreviated and
-// unpunctuated, and the index had no vector anywhere near them.
-//
-// The ORDER matters because only the first two reach the LLM prompt
-// (LLMRouter.entry caps at two, for context budget). The full sentences
-// are the better teaching examples for a model choosing between five
-// candidates, so they stay in front; the abbreviations are for retrieval,
-// which reads all of them. Append colloquial entries, never prepend.
-//
-// Adding or editing any of this text changes the index fingerprint, so
-// the next launch re-embeds the catalog once before serving a request.
-
 enum ToolCatalog {
     static let all: [ToolDefinition] = [
         ToolDefinition(
@@ -61,9 +33,14 @@ enum ToolCatalog {
         ToolDefinition(
             displayName: "routing_number",
             category: .accounts,
-            description: "Show the routing number of the user's account.",
+            description: "Show the user's bank routing number — the nine-digit number a transfer or direct deposit needs. The same number for every account the user holds.",
             notFor: "the account number itself (use account_number) or card numbers (use card_number)",
-            argumentHint: "which account: checking or savings",
+            // A routing number identifies the BANK, not one of the
+            // customer's accounts, and `RoutingNumberTool` takes
+            // `NoArguments`. This read "which account: checking or
+            // savings" until 2026-08-19 — a parameter the tool does not
+            // have, on a question that never names an account.
+            argumentHint: "no parameters",
             exampleQueries: [
                 "What's my routing number?", "I need the routing number for a wire transfer",
                 "Routing number for my checking account", "Routing number for my savings account",
@@ -77,7 +54,11 @@ enum ToolCatalog {
             category: .accounts,
             description: "Show the user's account number.",
             notFor: "the routing number (use routing_number) or card numbers (use card_number)",
-            argumentHint: "which account: checking or savings",
+            // NumberRequest.account takes an AccountType, which is four
+            // cases, not two — this named only the pair the mock happens
+            // to distinguish and left the router thinking `credit card`
+            // and `all` were not valid answers here.
+            argumentHint: "which account: checking, savings, credit card, or all",
             exampleQueries: [
                 "What's my account number?", "Show my savings account number", "I need my checking account number for direct deposit",
                 "acct number", "my acc number"
@@ -115,11 +96,21 @@ enum ToolCatalog {
             displayName: "credit_score",
             category: .creditAndRewards,
             description: "Show the user's current credit score.",
-            notFor: "advice on improving or disputing the score",
+            // "advice on improving or disputing the score" is one exclusion;
+            // the other is unwritten because no tool anywhere covers it: this
+            // app tracks no score HISTORY, so "has it changed?" is not a
+            // phrasing of "what is it now" — it asks for a comparison this
+            // tool cannot make. "Has my credit score changed?" sat in
+            // exampleQueries until 2026-08-19 on the assumption that it did,
+            // which routed the query here and produced an answer that
+            // stated the current score while silently never addressing
+            // "changed" — exactly the half-answer RouterPrompt.system's
+            // completeness rule calls worse than escalating.
+            notFor: "advice on improving or disputing the score, or whether the score has changed (no tool tracks a previous score to compare against)",
             argumentHint: "no parameters",
             exampleQueries: [
-                "What's my credit score?", "Show my current credit score", "Has my credit score changed?",
-                "my fico", "fico score", "credit score"
+                "What's my credit score?", "Show my current credit score", "my fico",
+                "fico score", "credit score"
             ],
             icon: "gauge",
             color: .mint
@@ -181,7 +172,12 @@ enum ToolCatalog {
             category: .money,
             description: "Show the fees and charges on the user's account, such as the monthly service fee.",
             notFor: "waiving or disputing a fee (actions)",
-            argumentHint: "which fee or account, e.g. 'monthly service fee', 'all charges on checking'",
+            // FeesRequest takes an AccountType only. There is no per-fee
+            // selector — MockBankAPIClient.feesAndCharges returns the
+            // same fixed list of every fee regardless of what it is
+            // asked for, so "e.g. 'monthly service fee'" named a filter
+            // this tool cannot apply.
+            argumentHint: "which account: checking, savings, credit card, or all",
             exampleQueries: [
                 "What's my monthly service fee?", "What charges are on my account?",
                 "What fees are on my checking account?", "Why am I being charged a service fee?",
@@ -255,7 +251,10 @@ enum ToolCatalog {
             category: .payments,
             description: "Show payments and transactions that are currently processing and haven't cleared yet.",
             notFor: "future scheduled payments and autopay (use scheduled_payments), completed transactions (use list_transactions), or making or canceling a payment (action)",
-            argumentHint: "which account or payee, or 'all'",
+            // PendingRequest takes an AccountType only. There is no
+            // payee filter — MockBankAPIClient.pendingPayments returns
+            // the same fixed list regardless of what it is asked for.
+            argumentHint: "which account: checking, savings, credit card, or all",
             exampleQueries: [
                 "Do I have any pending payments?", "Show payments that haven't cleared", "Any pending charges on my credit card?",
                 "whats pending", "anything pending"
@@ -268,7 +267,11 @@ enum ToolCatalog {
             category: .payments,
             description: "Show upcoming scheduled payments, future transfers, and autopay settings.",
             notFor: "payments already processing (use pending_payments) or creating, changing, or canceling a payment (actions)",
-            argumentHint: "the period or payee, e.g. 'next week', 'electricity bill', or 'all'",
+            // ScheduledRequest takes an AccountType only. There is no
+            // period or payee filter — MockBankAPIClient.scheduledPayments
+            // returns the same fixed list regardless of what it is asked
+            // for.
+            argumentHint: "which account: checking, savings, credit card, or all",
             exampleQueries: [
                 "What payments are scheduled for next week?", "Show my autopay settings", "When is my rent transfer going out?",
                 "upcoming payments", "whats scheduled"
@@ -342,13 +345,32 @@ enum ToolCatalog {
             category: .money,
             description: "Show the interest the user's accounts have earned.",
             notFor: "fees charged to the account (use fees_and_charges) or rates offered on new products",
-            argumentHint: "which account and period, e.g. 'savings last month'",
+            // InterestRequest takes an AccountType only — there is no
+            // period parameter anywhere in it, and MockBankAPIClient
+            // .interestEarned ignores the account too and always returns
+            // the same fixed sentence. "and period, e.g. 'savings last
+            // month'" described an argument this tool has never had.
+            argumentHint: "which account: checking, savings, credit card, or all",
             exampleQueries: [
                 "How much interest did my savings earn?", "What interest did I get this year?", "Show interest earned on my accounts",
                 "interest earned", "savings interest"
             ],
             icon: "percent",
             color: .green
+        ),
+        ToolDefinition(
+            displayName: "calculator",
+            category: .utility,
+            description: "Calculate a figure from numbers other tools have already returned: a total, an average, a difference, a percentage, a product, a quotient, the largest or smallest of a set, or a two-way comparison.",
+            notFor: "fetching a figure no other tool has returned yet — this tool only computes from numbers already looked up, it cannot look up anything itself",
+            argumentHint: "what to calculate (sum, average, difference, percentage, multiply, divide, max, or min) and the figures to use, copied exactly from another tool's result",
+            exampleQueries: [
+                "How much more did I spend at Starbucks than at Walmart?", "What's my average spend over the last three months?",
+                "Is my checking balance enough to cover my rent?",
+                "starbucks vs walmart spend", "avg spend last 3 months", "which month did i spend the most"
+            ],
+            icon: "plus.forwardslash.minus",
+            color: .indigo
         )
     ]
 

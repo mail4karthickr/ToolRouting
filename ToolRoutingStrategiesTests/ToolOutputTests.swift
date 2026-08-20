@@ -86,7 +86,7 @@ struct ToolOutputTests {
     func sentenceCarriesNoCount() async throws {
         let client = MockBankAPIClient()
         let scheduled = try await ScheduledPaymentsTool(client: client)
-            .call(arguments: AccountArgument(account: "all"))
+            .call(arguments: .init(account: .all))
 
         #expect(scheduled.contains("$1,850"))
         #expect(!scheduled.contains("3 "))
@@ -101,9 +101,9 @@ struct ToolOutputTests {
     func paymentListsAreDistinguishable() async throws {
         let client = MockBankAPIClient()
         let pending = try await PendingPaymentsTool(client: client)
-            .call(arguments: AccountArgument(account: "all"))
+            .call(arguments: .init(account: .all))
         let scheduled = try await ScheduledPaymentsTool(client: client)
-            .call(arguments: AccountArgument(account: "all"))
+            .call(arguments: .init(account: .all))
 
         #expect(pending.contains("pending"))
         #expect(pending.contains("processing"))
