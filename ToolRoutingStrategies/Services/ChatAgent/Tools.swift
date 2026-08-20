@@ -137,16 +137,62 @@ struct SearchTransactionsTool: Tool {
     var name: String { catalogEntry("search_transactions").displayName }
     var description: String { catalogEntry("search_transactions").description }
 
+    /// Every field optional, and every default lives HERE rather than in a
+    /// string the model has to remember and retype. "Leave this at some
+    /// sentinel value for no filter" was the earlier design, and it broke:
+    /// asked for Starbucks with no time period named, the model wrote
+    /// `startDate: "2026-07-01"` — the literal example the OLDER-edge
+    /// guide text led with, not the "far in the past" case the same text
+    /// also described. A required field always gets a value, so an unsure
+    /// model reaches for the nearest example rather than the right
+    /// behaviour. An optional field just gets omitted, which is a
+    /// question the type system answers instead of the model.
     @Generable
     struct MerchantSearch {
-        @Guide(description: "The merchant name, e.g. Starbucks")
-        var merchant: String
+        @Guide(description: "The merchant name, e.g. Starbucks. Omit when the question names no merchant.")
+        var merchant: String? = nil
+
+        @Guide(description: "Which spending category to filter to. Omit when the question names no category.")
+        var category: TransactionCategory? = nil
+
+        @Guide(description: "Which account to filter to. Omit when the question names no account.")
+        var account: AccountType? = nil
+
+        @Guide(description: """
+            The OLDER edge of the search window, as yyyy-MM-dd. Omit this ENTIRELY when \
+            the question names no time period. When it DOES name one, work it out from \
+            today's date, given in the turn: "last month" is the 1st of the PREVIOUS \
+            calendar month; "this month" is the 1st of the CURRENT month; a "week" of a \
+            month is days 1-7, 8-14, 15-21, and 22-through the month's last day.
+            """)
+        var startDate: String? = nil
+
+        @Guide(description: """
+            The MORE RECENT edge of the search window, as yyyy-MM-dd. Omit together with \
+            startDate when the question names no time period. Otherwise work this out the \
+            same way as startDate — e.g. today's own date for "through today".
+            """)
+        var endDate: String? = nil
     }
 
     func call(arguments: MerchantSearch) async throws -> String {
-        let transactions = try await client.searchTransactions(merchant: arguments.merchant)
+        guard let start = Self.resolveDate(arguments.startDate, fallback: .distantPast) else {
+            return "Could not read a date from '\(arguments.startDate ?? "")'. Use yyyy-MM-dd, e.g. 2026-08-01."
+        }
+        guard let end = Self.resolveDate(arguments.endDate, fallback: .distantFuture) else {
+            return "Could not read a date from '\(arguments.endDate ?? "")'. Use yyyy-MM-dd, e.g. 2026-08-01."
+        }
+
+        let merchant = arguments.merchant ?? ""
+        let transactions = try await client.searchTransactions(
+            merchant: merchant,
+            category: arguments.category ?? .all,
+            accountType: arguments.account ?? .all,
+            startDate: min(start, end),
+            endDate: max(start, end)
+        )
         guard !transactions.isEmpty else {
-            return "No transactions found for \(arguments.merchant)."
+            return "No transactions found\(merchant.isEmpty ? "" : " for \(merchant)")."
         }
         let clauses = transactions.map(ListTransactionsTool.clause(for:))
         let total = transactions.reduce(Decimal.zero) { $0 + $1.amount }
@@ -157,6 +203,23 @@ struct SearchTransactionsTool: Tool {
         guard transactions.count > 1 else { return "You spent \(clauses[0])." }
         return "You spent \(ToolOutput.list(clauses)), "
             + "\(abs(total).formatted(.currency(code: "USD"))) in total."
+    }
+
+    /// `nil` means the field was omitted — the model's way of saying no
+    /// time period was named — and resolves straight to `fallback` \
+    /// rather than a parse attempt. A PRESENT value still gets checked:
+    /// omitting is trusted, typing something is not.
+    private static func resolveDate(_ text: String?, fallback: Date) -> Date? {
+        guard let text else { return fallback }
+        return parseDate(text)
+    }
+
+    /// `yyyy-MM-dd` only — the ONE date format the model ever writes,
+    /// always with a year, so unlike the informal dates other tools'
+    /// OUTPUT carries ("on the 1st", "Jul 21"), there is nothing here to
+    /// guess.
+    private static func parseDate(_ text: String) -> Date? {
+        try? Date(text, strategy: .iso8601.year().month().day())
     }
 }
 

@@ -150,10 +150,20 @@ enum MockGroundTruth {
                 // until 2026-08-13 and drifted the moment the tool
                 // stopped emitting rows — the exact failure the header
                 // of this file is about.
-                let transactions = try await client.searchTransactions(merchant: fallback(argument, "Starbucks"))
+                //
+                // The dataset's argument slot is a single free-text
+                // string and it is already spent on the merchant, so
+                // category/account/date-range are always unfiltered here
+                // — there is nowhere in `ModelSample`'s shape to carry a
+                // second or third argument for this tool yet.
+                let merchant = fallback(argument, "Starbucks")
+                let transactions = try await client.searchTransactions(
+                    merchant: merchant, category: .all, accountType: .all,
+                    startDate: .distantPast, endDate: .distantFuture
+                )
                 guard !transactions.isEmpty else { return nil }
                 return try await SearchTransactionsTool(client: client)
-                    .call(arguments: .init(merchant: fallback(argument, "Starbucks")))
+                    .call(arguments: .init(merchant: merchant))
             // "none" and anything unrecognized have no output to derive.
             default:
                 return nil

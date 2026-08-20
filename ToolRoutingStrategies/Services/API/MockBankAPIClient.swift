@@ -11,8 +11,21 @@ struct MockBankAPIClient: BankAPIClient {
         return Self.transactions.filter { $0.date >= cutoff }
     }
 
-    func searchTransactions(merchant: String) async throws -> [Transaction] {
-        Self.transactions.filter { $0.merchant.localizedCaseInsensitiveContains(merchant) }
+    /// `startDate`/`endDate` arrive already parsed and already ordered —
+    /// see the note on `BankAPIClient.searchTransactions`.
+    func searchTransactions(
+        merchant: String, category: TransactionCategory, accountType: AccountType,
+        startDate: Date, endDate: Date
+    ) async throws -> [Transaction] {
+        let category = category.apiValue
+        let accountType = accountType.apiValue
+
+        return Self.transactions.filter { transaction in
+            transaction.merchant.localizedCaseInsensitiveContains(merchant)
+                && (category == "all" || transaction.category.caseInsensitiveCompare(category) == .orderedSame)
+                && (accountType == "all" || transaction.account.caseInsensitiveCompare(accountType) == .orderedSame)
+                && transaction.date >= startDate && transaction.date <= endDate
+        }
     }
 
     func routingNumber() async throws -> String {

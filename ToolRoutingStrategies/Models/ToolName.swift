@@ -17,7 +17,10 @@ import FoundationModels
 @Generable
 enum ToolName {
     case listTransactions(days: Int)
-    case searchTransactions(merchant: String)
+    case searchTransactions(
+        merchant: String, category: TransactionCategory, account: AccountType,
+        startDate: String, endDate: String
+    )
     case routingNumber
     case accountNumber(account: AccountType)
     case cardNumber(card: CardType)
@@ -119,6 +122,53 @@ extension CardType {
     }
 }
 
+/// Every category `Transaction.category` is populated with in
+/// `MockBankAPIClient`. A closed set for the same reason as `CardType`
+/// above: a free-text category argument means the model has to invent the
+/// exact string a transaction was tagged with, and getting it wrong (e.g.
+/// "Food" for "Dining") silently returns zero rows rather than an error.
+@Generable
+enum TransactionCategory {
+    case dining
+    case shopping
+    case groceries
+    case gas
+    case transport
+    case entertainment
+    case subscriptions
+    case utilities
+    case bankFees
+    case healthAndFitness
+    case travel
+    case income
+    case transfers
+    /// Every category — the right choice when the question names none.
+    case all
+}
+
+extension TransactionCategory {
+    /// What `BankAPIClient` takes — the exact string `Transaction.category`
+    /// is populated with in `MockBankAPIClient`.
+    var apiValue: String {
+        switch self {
+        case .dining: "Dining"
+        case .shopping: "Shopping"
+        case .groceries: "Groceries"
+        case .gas: "Gas"
+        case .transport: "Transport"
+        case .entertainment: "Entertainment"
+        case .subscriptions: "Subscriptions"
+        case .utilities: "Utilities"
+        case .bankFees: "Bank Fees"
+        case .healthAndFitness: "Health & Fitness"
+        case .travel: "Travel"
+        case .income: "Income"
+        case .transfers: "Transfers"
+        case .all: "all"
+        }
+    }
+}
+
 // MARK: - Display helpers
 
 extension ToolName {
@@ -155,7 +205,8 @@ extension ToolName {
     var argumentSummary: String? {
         switch self {
         case .listTransactions(let days): "days: \(days)"
-        case .searchTransactions(let merchant): "merchant: \(merchant)"
+        case .searchTransactions(let merchant, let category, let account, let startDate, let endDate):
+            "merchant: \(merchant), category: \(category), account: \(account), from \(startDate) to \(endDate)"
         case .routingNumber: nil
         case .accountNumber(let account): "account: \(account)"
         case .cardNumber(let card): "card: \(card)"

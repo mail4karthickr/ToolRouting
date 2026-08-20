@@ -18,14 +18,15 @@ enum ToolCatalog {
         ToolDefinition(
             displayName: "search_transactions",
             category: .transactions,
-            description: "Search the user's past transactions for a specific merchant — including how much they spent at a store or service.",
-            notFor: "a general recent listing without a merchant (use list_transactions)",
-            argumentHint: "the merchant name, e.g. 'Starbucks'",
+            description: "Search the user's past transactions by merchant, spending category, account, and date range — including how much they spent at a store or service, or on a category like dining or subscriptions.",
+            notFor: "a general recent listing with no merchant, category, or date range in mind (use list_transactions)",
+            argumentHint: "any of: a merchant name (e.g. 'Starbucks'), a spending category, an account, and a date range as yyyy-MM-dd, worked out from today's date; every one of these is optional — omit whichever the question doesn't name",
             exampleQueries: [
-                "What did I spend at Starbucks?", "Show my Amazon purchases", "Any charges from Netflix?",
+                "What did I spend at Starbucks?", "Show my Amazon purchases", "What did I spend on dining last month?",
                 "spent at starbucks", "starbucks charges", "amazon spend",
                 "how much did i spend at", "what did i spend at a shop", "spending at a merchant",
-                "charges from a store", "how much have i spent there", "purchases from a company"
+                "charges from a store", "how much have i spent there", "purchases from a company",
+                "how much did i spend on groceries", "subscriptions spend this month", "dining vs groceries last month"
             ],
             icon: "magnifyingglass",
             color: .gray

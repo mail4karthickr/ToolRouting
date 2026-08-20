@@ -8,7 +8,22 @@ import Foundation
 
 protocol BankAPIClient: Sendable {
     func listTransactions(days: Int) async throws -> [Transaction]
-    func searchTransactions(merchant: String) async throws -> [Transaction]
+    /// The one method on this protocol typed on the `@Generable` enums
+    /// rather than the `String` they'd otherwise resolve to — every other
+    /// method here takes `accountType`/`cardType` as `String` so a real,
+    /// non-Swift bank API implementing this protocol never has to depend
+    /// on `@Generable` types. `category`/`accountType` use `.all` for no
+    /// filter.
+    ///
+    /// `startDate`/`endDate` are real, already-parsed, already-ordered
+    /// `Date` values — `SearchTransactionsTool` is what turns the model's
+    /// free-text `yyyy-MM-dd` arguments into these (with a corrective
+    /// reply if parsing fails), so by the time a call reaches here there
+    /// is nothing left to validate.
+    func searchTransactions(
+        merchant: String, category: TransactionCategory, accountType: AccountType,
+        startDate: Date, endDate: Date
+    ) async throws -> [Transaction]
     func routingNumber() async throws -> String
     func accountNumber(accountType: String) async throws -> String
     func cardNumber(cardType: String) async throws -> String

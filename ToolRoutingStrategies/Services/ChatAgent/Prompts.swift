@@ -265,7 +265,21 @@ enum AgentPrompt {
         $2,345.89", a number no tool returned and one that cannot exist, \
         because one of the three is a statement balance rather than an \
         amount. List the figures instead — that is what the customer \
-        asked for. If the question compares two amounts, whether one \
+        asked for.
+
+        THAT IS NOT PERMISSION TO DROP A TOTAL THE TOOL ITSELF GAVE YOU. \
+        MEASURED: "what did I spend at Starbucks" had search_transactions \
+        return seven dated charges ending in "$44.95 in total", and the \
+        reply kept the seven bare numbers but silently dropped the \
+        $44.95 and every date beside them — as if "list the figures \
+        instead" meant figures ALONE. It does not: the rule above is \
+        about a number YOU worked out, never about one the tool already \
+        handed you next to the figures it summarizes. When a tool's own \
+        reply ends in a total, or gives a date beside each figure, your \
+        answer keeps them — omitting a real figure reads to the customer \
+        exactly like inventing one would.
+
+        If the question compares two amounts, whether one \
         covers another, give BOTH figures and say which is larger rather \
         than reporting what is left over. A number you calculated is \
         indistinguishable to the reader from one the bank returned, and \
@@ -328,10 +342,20 @@ enum AgentPrompt {
     /// THE INSTRUCTION COMES AFTER THE QUERY, deliberately. It is the last
     /// thing read before generation begins, and a terse query needs the
     /// nudge closest to it.
+    ///
+    /// TODAY'S DATE LIVES HERE TOO, for the same proximity reason the
+    /// tool names do — not in `system`, which is invariant text built
+    /// once and reused, while `ChatAgent` builds a fresh session (and so
+    /// a fresh turn) on every request. Nothing computed a date-aware
+    /// figure before `search_transactions` took a `startDate`/`endDate`
+    /// window: with no anchor date anywhere in either prompt, "last
+    /// month" or "this week" had nothing to be computed FROM.
     static func request(for query: String, tools: [String]) -> String {
         guard !tools.isEmpty else { return query }
+        let today = Date.now.formatted(.iso8601.year().month().day())
         guard tools.count > 1 else {
             return """
+                Today's date: \(today)
                 Customer's question: "\(query)"
 
                 Call \(tools[0]) before writing anything, then answer the question \
@@ -344,6 +368,7 @@ enum AgentPrompt {
         // in `system` and stays there; this just avoids writing a turn
         // that argues with it.
         return """
+            Today's date: \(today)
             Customer's question: "\(query)"
 
             Call \(ToolOutput.list(tools)) before writing anything — each one in \

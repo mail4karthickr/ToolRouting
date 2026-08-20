@@ -91,7 +91,10 @@ extension ToolName {
     static func withDefaultArguments(named displayName: String, query: String) -> ToolName? {
         switch displayName {
         case "list_transactions": .listTransactions(days: 7)
-        case "search_transactions": .searchTransactions(merchant: query)
+        case "search_transactions":
+            .searchTransactions(
+                merchant: query, category: .all, account: .all, startDate: "2000-01-01", endDate: "2100-01-01"
+            )
         case "routing_number": .routingNumber
         case "account_number": .accountNumber(account: .checking)
         case "card_number": .cardNumber(card: .all)
