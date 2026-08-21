@@ -216,7 +216,16 @@ struct HybridRouterTests {
         return url
     }()
 
-    static let batch: Range<Int>? = nil
+    /// THE THREE COMPARISON SAMPLES, while they are being worked on.
+    /// Samples 0-5 are single-window totals and already measured — 4 of 6
+    /// clean, with the two failures diagnosed. Re-running them costs a
+    /// judge round trip each and buries the rows being read.
+    ///
+    /// Set this to `nil` before drawing any conclusion about the chain as
+    /// a whole: three samples is a debugging loop, not a measurement, and
+    /// a change that fixes a comparison is perfectly capable of breaking a
+    /// single-window total.
+    static let batch: Range<Int>? = 6..<9
 
     static let judgeFloor = 3.5
 

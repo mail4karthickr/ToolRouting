@@ -7,11 +7,19 @@
     "output": {
       "value": {
         "answer": "You spent $19.45 at Starbucks this month.",
-        "arguments": ["this month", "Starbucks", "sum"],
+        "arguments": [
+          "this month",
+          "Starbucks",
+          "sum"
+        ],
         "executedTools": [],
         "orderMatters": true,
         "toolOutput": "",
-        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
       }
     }
   },
@@ -23,11 +31,19 @@
     "output": {
       "value": {
         "answer": "You spent $51.55 at Starbucks over the last two months.",
-        "arguments": ["the last 2 months", "Starbucks", "sum"],
+        "arguments": [
+          "the last 2 months",
+          "Starbucks",
+          "sum"
+        ],
         "executedTools": [],
         "orderMatters": true,
         "toolOutput": "",
-        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
       }
     }
   },
@@ -39,11 +55,19 @@
     "output": {
       "value": {
         "answer": "You spent $187.30 at Walmart last month.",
-        "arguments": ["last month", "Walmart", "sum"],
+        "arguments": [
+          "last month",
+          "Walmart",
+          "sum"
+        ],
         "executedTools": [],
         "orderMatters": true,
         "toolOutput": "",
-        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
       }
     }
   },
@@ -55,11 +79,19 @@
     "output": {
       "value": {
         "answer": "You spent $86.60 on dining last month.",
-        "arguments": ["last month", "dining", "sum"],
+        "arguments": [
+          "last month",
+          "dining",
+          "sum"
+        ],
         "executedTools": [],
         "orderMatters": true,
         "toolOutput": "",
-        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
       }
     }
   },
@@ -71,11 +103,19 @@
     "output": {
       "value": {
         "answer": "You spent $26.60 at Starbucks in June.",
-        "arguments": ["June", "Starbucks", "sum"],
+        "arguments": [
+          "June",
+          "Starbucks",
+          "sum"
+        ],
         "executedTools": [],
         "orderMatters": true,
         "toolOutput": "",
-        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
       }
     }
   },
@@ -87,11 +127,91 @@
     "output": {
       "value": {
         "answer": "You spent $116.69 at Amazon in the last 30 days.",
-        "arguments": ["the last 30 days", "Amazon", "sum"],
+        "arguments": [
+          "the last 30 days",
+          "Amazon",
+          "sum"
+        ],
         "executedTools": [],
         "orderMatters": true,
         "toolOutput": "",
-        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "starbucks spend this month vs last month"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $19.45 at Starbucks this month and $25.50 last month, so $6.05 less this month.",
+        "arguments": [
+          "this month and last month",
+          "Starbucks",
+          "difference"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "did i spend more at starbcuks or chipotle last mnth"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $27.00 at Chipotle and $25.50 at Starbucks last month, so $1.50 more at Chipotle.",
+        "arguments": [
+          "last month",
+          "Starbucks and Chipotle",
+          "compare"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "how much more did i spnd at walmart than starbucks last month"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $161.80 more at Walmart than at Starbucks last month \u2014 $187.30 against $25.50.",
+        "arguments": [
+          "last month",
+          "Walmart and Starbucks",
+          "difference"
+        ],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": [
+          "resolve_date_range",
+          "search_transactions",
+          "calculator"
+        ]
       }
     }
   }
