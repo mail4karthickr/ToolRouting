@@ -94,8 +94,13 @@ final class LLMRouter {
         scores: [String: Double]
     ) -> [RoutedCall] {
         var seen = Set<String>()
-        return plan.toolNames
+        let named = plan.toolNames
             .filter { $0 != ToolName.none.displayName && seen.insert($0).inserted }
+        // Completed before it is executed. A prerequisite the router left
+        // out is not a smaller plan, it is a broken one — branch_hours
+        // without find_nearest_branch gets an ID it was never given. The
+        // dependency is declared on the tool; this is where it is applied.
+        return ToolCatalog.closure(over: named)
             .compactMap { name in
                 ToolName.withDefaultArguments(named: name, query: query)
                     .map { RoutedCall(tool: $0, confidence: scores[name]) }
@@ -165,7 +170,28 @@ final class LLMRouter {
             properties: [
                 DynamicGenerationSchema.Property(
                     name: reasoningProperty,
-                    description: "One short sentence: what the query is asking for, and whether any listed tool provides it. If no listed tool provides it — or covers only part of it — say so, and answer none for the whole request.",
+                    // NOTHING HERE MENTIONS calculator, AND THAT IS
+                    // DELIBERATE — two attempts did, and both made it
+                    // worse. Naming it as a tool the reasoning should
+                    // reach for got it selected and `search_transactions`
+                    // dropped: the reasoning said it needed "a date range
+                    // to filter transactions and a sum", then named no
+                    // tool to filter transactions. Removing the mention
+                    // got it omitted instead, and a total came back as a
+                    // list of figures.
+                    //
+                    // WHAT IS LEFT IS AN OPEN PROBLEM, not a solution.
+                    // MEASURED on spending_chain_qa: calculator is
+                    // retrieved for every spending prompt, at rank 1 to 3,
+                    // and this step selects it on four of six — declining
+                    // it on "how much did i spnd at walmart last mnth"
+                    // where it sat at RANK 1. Position is not the lever
+                    // and neither is wording. The two candidate fixes are
+                    // binding calculator at execution as a fallback, and
+                    // making this property enumerate what the query asks
+                    // for rather than describe it in prose, so a total has
+                    // a slot it cannot skip.
+                    description: "Step by step and briefly: name each separate piece of information the query needs, then for each piece name which tool(s) actually provide it — not just the first one that sounds related. A piece with no tool that fully provides it means the WHOLE request is `none`.",
                     schema: DynamicGenerationSchema(type: String.self)
                 ),
                 DynamicGenerationSchema.Property(

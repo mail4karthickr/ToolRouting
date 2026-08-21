@@ -45,5 +45,39 @@ struct ToolDefinition: Identifiable {
     /// the instructions are attention-budget constrained.
     var promptExample: String? = nil
 
+    /// What has to be in the plan already for this tool to be able to run.
+    ///
+    /// A FACT ABOUT THE TOOL, KEPT AS DATA. Every one of these used to be
+    /// a paragraph in `RouterPrompt.system` telling the model to remember
+    /// a dependency — get_location before find_nearest_atm,
+    /// find_nearest_branch before branch_hours — and each new tool added
+    /// another. Prose does not compose: the paragraph added for
+    /// resolve_date_range and the one added for calculator between them
+    /// produced a plan of `[resolve_date_range, calculator]` with nothing
+    /// to fetch the figures either of them needed.
+    ///
+    /// Held here, one dependency is declared once and enforced in Swift by
+    /// `ToolCatalog.closure(over:)`, which cannot forget it.
+    ///
+    /// The router still CHOOSES every tool, this one included — the
+    /// requirement does not hide anything from retrieval or selection. It
+    /// only repairs a plan that came back impossible to run.
+    var requires: Requirement = .none
+
     var id: String { displayName }
+}
+
+extension ToolDefinition {
+    /// What a tool needs in the plan before it can run.
+    enum Requirement: Equatable {
+        /// Runs on its own.
+        case none
+        /// Needs one named tool's output — get_location before
+        /// find_nearest_atm, find_nearest_branch before branch_hours.
+        case tool(String)
+        /// Needs SOMETHING to have been fetched first, without caring
+        /// what. calculator computes from figures another tool returned,
+        /// so any routed tool satisfies it and an empty plan does not.
+        case anyRoutedTool
+    }
 }

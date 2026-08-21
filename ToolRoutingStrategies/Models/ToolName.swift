@@ -17,10 +17,7 @@ import FoundationModels
 @Generable
 enum ToolName {
     case listTransactions(days: Int)
-    case searchTransactions(
-        merchant: String, category: TransactionCategory, account: AccountType,
-        startDate: String, endDate: String
-    )
+    case searchTransactions(merchant: String, category: TransactionCategory, account: AccountType)
     case routingNumber
     case accountNumber(account: AccountType)
     case cardNumber(card: CardType)
@@ -45,6 +42,12 @@ enum ToolName {
     /// unlike every other case here it carries no parameters: there is
     /// nothing meaningful to default them to ahead of time.
     case calculator
+    /// Turns the period a spending question names into the two dates
+    /// `searchTransactions` filters by. No parameters for the same reason
+    /// as `calculator`: WHICH period is decided live during execution, and
+    /// a question comparing two periods resolves two windows from one
+    /// routed name.
+    case resolveDateRange
     /// No local tool matches: the request (or a sub-task of it) can't be
     /// served on device, so it goes to the cloud model. Not a failure state.
     case none
@@ -197,6 +200,7 @@ extension ToolName {
         case .branchHours: "branch_hours"
         case .interestEarned: "interest_earned"
         case .calculator: "calculator"
+        case .resolveDateRange: "resolve_date_range"
         case .none: "none"
         }
     }
@@ -205,8 +209,8 @@ extension ToolName {
     var argumentSummary: String? {
         switch self {
         case .listTransactions(let days): "days: \(days)"
-        case .searchTransactions(let merchant, let category, let account, let startDate, let endDate):
-            "merchant: \(merchant), category: \(category), account: \(account), from \(startDate) to \(endDate)"
+        case .searchTransactions(let merchant, let category, let account):
+            "merchant: \(merchant), category: \(category), account: \(account)"
         case .routingNumber: nil
         case .accountNumber(let account): "account: \(account)"
         case .cardNumber(let card): "card: \(card)"
@@ -226,6 +230,7 @@ extension ToolName {
         case .branchHours(let branchID): "branchID: \(branchID)"
         case .interestEarned(let account): "account: \(account)"
         case .calculator: nil
+        case .resolveDateRange: nil
         case .none: nil
         }
     }

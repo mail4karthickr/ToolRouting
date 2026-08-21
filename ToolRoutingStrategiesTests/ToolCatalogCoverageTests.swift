@@ -55,7 +55,20 @@ struct ToolCatalogCoverageTests {
         ArgumentCoverage(tool: "routing_number", values: ["checking", "saving"]),
         ArgumentCoverage(tool: "card_number", values: ["debit", "credit"]),
         ArgumentCoverage(tool: "card_limits", values: ["debit", "credit"]),
-        ArgumentCoverage(tool: "fees_and_charges", values: ["checking"])
+        ArgumentCoverage(tool: "fees_and_charges", values: ["checking"]),
+        // resolve_date_range's period is a closed set, and it is the
+        // argument that decides which transactions come back. "this
+        // month" and "last month" are one word apart and resolve to
+        // windows that do not overlap, so a period without its own vector
+        // has to win on the description blended across all of them.
+        ArgumentCoverage(
+            tool: "resolve_date_range",
+            values: [
+                "this month", "last month", "this week", "last week",
+                "this year", "last year", "today", "yesterday",
+                "days", "weeks", "months", "June"
+            ]
+        )
     ]
 
     @Test(

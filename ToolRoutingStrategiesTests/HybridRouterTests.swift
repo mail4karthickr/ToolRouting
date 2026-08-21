@@ -189,7 +189,22 @@ struct HybridAnswerEvaluation: Evaluation {
 
 @Suite("Hybrid Router Evaluations")
 struct HybridRouterTests {
-    static let datasetName = "synthetic_banking_qa"
+    /// SWITCHED TO THE SPENDING CHAIN while that capability is being
+    /// built. `synthetic_banking_qa` (60 samples) is the full regression
+    /// set and nothing about it changed — swap this line back to run it.
+    ///
+    /// Six samples is not a statistic and is not meant to be: every one of
+    /// them exercises resolve_date_range → search_transactions →
+    /// calculator, the chain that has been failing, and a mean over six
+    /// tells you whether the chain works rather than what the app scores.
+    /// Widen it once these hold.
+    ///
+    /// EVERY EXPECTED FIGURE HERE IS ANCHORED TO 2026-08-21, because
+    /// `MockBankAPIClient` builds its transactions with `daysAgo(n)` from
+    /// `.now`. Which side of a month boundary a charge falls on therefore
+    /// changes daily, and these answers go stale with it — see the note on
+    /// `MockBankAPIClient.transactions`.
+    static let datasetName = "spending_chain_qa"
 
     static let samplesURL: URL = {
         guard let url = #bundle.url(forResource: datasetName, withExtension: "json") else {
@@ -317,8 +332,8 @@ struct HybridRouterTests {
         if let batch = Self.batch {
             print("""
                 ⚠️ BATCH RUN — samples \(batch.lowerBound)..<\(batch.upperBound) of \(Self.datasetName) \
-                (\(Self.samples.count) of 60). A batch is not a small full run: the 95% interval is \
-                about ±0.22 at 20 samples. Not comparable to a full pass.
+                (\(Self.samples.count) samples). A batch is not a small full run: the 95% interval \
+                is about ±0.22 at 20 samples. Not comparable to a full pass.
                 """)
         }
 

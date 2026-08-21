@@ -1,0 +1,96 @@
+[
+  {
+    "question": "How much did I spend at Starbucks this month?",
+    "expectedRanges": ["this month: 2026-08-01 to 2026-08-21"]
+  },
+  {
+    "question": "What did I spend on dining last month?",
+    "expectedRanges": ["last month: 2026-07-01 to 2026-07-31"]
+  },
+  {
+    "question": "How much have I spent this week?",
+    "expectedRanges": ["this week: 2026-08-16 to 2026-08-21"]
+  },
+  {
+    "question": "How much did I spend at Amazon last week?",
+    "expectedRanges": ["last week: 2026-08-09 to 2026-08-15"]
+  },
+  {
+    "question": "What have I spent today?",
+    "expectedRanges": ["today: 2026-08-21 to 2026-08-21"]
+  },
+  {
+    "question": "How much did I spend yesterday?",
+    "expectedRanges": ["yesterday: 2026-08-20 to 2026-08-20"]
+  },
+  {
+    "question": "What did I spend in the last 30 days?",
+    "expectedRanges": ["the last 30 days: 2026-07-23 to 2026-08-21"]
+  },
+  {
+    "question": "What's my average monthly spend over the last 3 months?",
+    "expectedRanges": ["the last 3 months: 2026-05-21 to 2026-08-21"]
+  },
+  {
+    "question": "Total amount spend at starbucks last two months",
+    "expectedRanges": ["the last 2 months: 2026-06-21 to 2026-08-21"]
+  },
+  {
+    "question": "How much have I spent in the past two weeks?",
+    "expectedRanges": ["the last 2 weeks: 2026-08-08 to 2026-08-21"]
+  },
+  {
+    "question": "Show me what I spent in June",
+    "expectedRanges": ["June 2026: 2026-06-01 to 2026-06-30"]
+  },
+  {
+    "question": "What did I spend at Walmart in December?",
+    "expectedRanges": ["December 2025: 2025-12-01 to 2025-12-31"]
+  },
+  {
+    "question": "Show me what I spent in December",
+    "expectedRanges": ["December 2025: 2025-12-01 to 2025-12-31"]
+  },
+  {
+    "question": "What did I spend at Walmart in June?",
+    "expectedRanges": ["June 2026: 2026-06-01 to 2026-06-30"]
+  },
+  {
+    "question": "How much have I spent this year?",
+    "expectedRanges": ["this year: 2026-01-01 to 2026-08-21"]
+  },
+  {
+    "question": "How much did I spend at Target in the past three weeks?",
+    "expectedRanges": ["the last 3 weeks: 2026-08-01 to 2026-08-21"]
+  },
+  {
+    "question": "What did I spend over the past two months?",
+    "expectedRanges": ["the last 2 months: 2026-06-21 to 2026-08-21"]
+  },
+  {
+    "question": "What have I spent in the past ten days?",
+    "expectedRanges": ["the last 10 days: 2026-08-12 to 2026-08-21"]
+  },
+  {
+    "question": "What did I spend at Amazon in November?",
+    "expectedRanges": ["November 2025: 2025-11-01 to 2025-11-30"]
+  },
+  {
+    "question": "Show me my spending in October",
+    "expectedRanges": ["October 2025: 2025-10-01 to 2025-10-31"]
+  },
+  {
+    "question": "How does my Starbucks spending this month compare with last month?",
+    "expectedRanges": [
+      "this month: 2026-08-01 to 2026-08-21",
+      "last month: 2026-07-01 to 2026-07-31"
+    ]
+  },
+  {
+    "question": "Did I spend more on groceries in June or July?",
+    "expectedRanges": [
+      "June 2026: 2026-06-01 to 2026-06-30",
+      "July 2026: 2026-07-01 to 2026-07-31"
+    ]
+  }
+]

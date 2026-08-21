@@ -20,8 +20,16 @@ struct MockBankAPIClient: BankAPIClient {
         let category = category.apiValue
         let accountType = accountType.apiValue
 
+        // AN EMPTY MERCHANT MEANS EVERY MERCHANT, and it has to be spelled
+        // out. `localizedCaseInsensitiveContains("")` is FALSE, not true —
+        // so an omitted merchant matched nothing at all, while the two
+        // filters beside it each have an explicit "all" escape. MEASURED:
+        // "starbucks spend last two months" reached this with no merchant
+        // and came back "No transactions found" over a window holding
+        // every transaction in the fixture, which reads exactly like a
+        // customer with no spending.
         return Self.transactions.filter { transaction in
-            transaction.merchant.localizedCaseInsensitiveContains(merchant)
+            (merchant.isEmpty || transaction.merchant.localizedCaseInsensitiveContains(merchant))
                 && (category == "all" || transaction.category.caseInsensitiveCompare(category) == .orderedSame)
                 && (accountType == "all" || transaction.account.caseInsensitiveCompare(accountType) == .orderedSame)
                 && transaction.date >= startDate && transaction.date <= endDate

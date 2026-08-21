@@ -1,0 +1,98 @@
+[
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "how much i spend at starbucks this month"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $19.45 at Starbucks this month.",
+        "arguments": ["this month", "Starbucks", "sum"],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "total spent at starbcuks last 2 months"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $51.55 at Starbucks over the last two months.",
+        "arguments": ["the last 2 months", "Starbucks", "sum"],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "how much did i spnd at walmart last mnth"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $187.30 at Walmart last month.",
+        "arguments": ["last month", "Walmart", "sum"],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "dining spend last month total"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $86.60 on dining last month.",
+        "arguments": ["last month", "dining", "sum"],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "hw much i spent at strbucks in june"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $26.60 at Starbucks in June.",
+        "arguments": ["June", "Starbucks", "sum"],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+      }
+    }
+  },
+  {
+    "input": {
+      "instructions": "null",
+      "prompt": "amazon spend last 30 days total"
+    },
+    "output": {
+      "value": {
+        "answer": "You spent $116.69 at Amazon in the last 30 days.",
+        "arguments": ["the last 30 days", "Amazon", "sum"],
+        "executedTools": [],
+        "orderMatters": true,
+        "toolOutput": "",
+        "tools": ["resolve_date_range", "search_transactions", "calculator"]
+      }
+    }
+  }
+]

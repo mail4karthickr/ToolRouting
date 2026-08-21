@@ -92,9 +92,7 @@ extension ToolName {
         switch displayName {
         case "list_transactions": .listTransactions(days: 7)
         case "search_transactions":
-            .searchTransactions(
-                merchant: query, category: .all, account: .all, startDate: "2000-01-01", endDate: "2100-01-01"
-            )
+            .searchTransactions(merchant: query, category: .all, account: .all)
         case "routing_number": .routingNumber
         case "account_number": .accountNumber(account: .checking)
         case "card_number": .cardNumber(card: .all)
@@ -114,6 +112,7 @@ extension ToolName {
         case "branch_hours": .branchHours(branchID: "")
         case "interest_earned": .interestEarned(account: .all)
         case "calculator": .calculator
+        case "resolve_date_range": .resolveDateRange
         default: nil
         }
     }

@@ -158,29 +158,36 @@ struct SearchTransactionsTool: Tool {
         @Guide(description: "Which account to filter to. Omit when the question names no account.")
         var account: AccountType? = nil
 
+        /// NEITHER FIELD DOES CALENDAR ARITHMETIC, and neither is ever
+        /// filled from today's date. They carry across the two dates
+        /// `resolve_date_range` returned, the way `find_nearest_atm`
+        /// carries across the coordinates `get_location` returned.
+        ///
+        /// That tool always runs first — it has an `allTime` period for a
+        /// question naming none — so there is always a real pair to copy
+        /// and never a reason to work one out. MEASURED, when there was:
+        /// asked for "starbucks spend last two months" with no date tool
+        /// in the plan, this filled both fields itself from the date in
+        /// the turn, and nothing in the answer showed where they came from.
         @Guide(description: """
-            The OLDER edge of the search window, as yyyy-MM-dd. Omit this ENTIRELY when \
-            the question names no time period. When it DOES name one, work it out from \
-            today's date, given in the turn: "last month" is the 1st of the PREVIOUS \
-            calendar month; "this month" is the 1st of the CURRENT month; a "week" of a \
-            month is days 1-7, 8-14, 15-21, and 22-through the month's last day.
+            The OLDER edge of the window: the FIRST of the two dates resolve_date_range \
+            returned, copied character for character. Never work a date out yourself.
             """)
         var startDate: String? = nil
 
         @Guide(description: """
-            The MORE RECENT edge of the search window, as yyyy-MM-dd. Omit together with \
-            startDate when the question names no time period. Otherwise work this out the \
-            same way as startDate — e.g. today's own date for "through today".
+            The MORE RECENT edge of the window: the SECOND of the two dates \
+            resolve_date_range returned, copied character for character.
             """)
         var endDate: String? = nil
     }
 
     func call(arguments: MerchantSearch) async throws -> String {
-        guard let start = Self.resolveDate(arguments.startDate, fallback: .distantPast) else {
-            return "Could not read a date from '\(arguments.startDate ?? "")'. Use yyyy-MM-dd, e.g. 2026-08-01."
+        guard let start = Self.resolveDate(arguments.startDate, fallback: .distantPast, edge: .start) else {
+            return "Could not read a date from '\(arguments.startDate ?? "")'. Copy it exactly as resolve_date_range returned it, e.g. 2026-08-01."
         }
-        guard let end = Self.resolveDate(arguments.endDate, fallback: .distantFuture) else {
-            return "Could not read a date from '\(arguments.endDate ?? "")'. Use yyyy-MM-dd, e.g. 2026-08-01."
+        guard let end = Self.resolveDate(arguments.endDate, fallback: .distantFuture, edge: .end) else {
+            return "Could not read a date from '\(arguments.endDate ?? "")'. Copy it exactly as resolve_date_range returned it, e.g. 2026-08-01."
         }
 
         let merchant = arguments.merchant ?? ""
@@ -195,31 +202,67 @@ struct SearchTransactionsTool: Tool {
             return "No transactions found\(merchant.isEmpty ? "" : " for \(merchant)")."
         }
         let clauses = transactions.map(ListTransactionsTool.clause(for:))
-        let total = transactions.reduce(Decimal.zero) { $0 + $1.amount }
-        guard transactions.allSatisfy({ $0.amount < 0 }) else {
-            return "Matching transactions: \(ToolOutput.list(clauses)), "
-                + "\(total.formatted(.currency(code: "USD"))) in total."
-        }
-        guard transactions.count > 1 else { return "You spent \(clauses[0])." }
-        return "You spent \(ToolOutput.list(clauses)), "
-            + "\(abs(total).formatted(.currency(code: "USD"))) in total."
+        // NO TOTAL — deliberately. This tool used to add the figures up
+        // itself, which meant a plain "how much did I spend at X"
+        // question never needed calculator at all: the one tool that
+        // "obviously" answered it also silently did the arithmetic. Each
+        // matching transaction stands on its own here; a total across
+        // more than one is calculator's job, same as any other figure no
+        // tool hands back directly.
+        guard clauses.count > 1 else { return "You spent \(clauses[0])." }
+        return "Matching transactions: \(ToolOutput.list(clauses))."
     }
 
-    /// `nil` means the field was omitted — the model's way of saying no
-    /// time period was named — and resolves straight to `fallback` \
-    /// rather than a parse attempt. A PRESENT value still gets checked:
-    /// omitting is trusted, typing something is not.
-    private static func resolveDate(_ text: String?, fallback: Date) -> Date? {
+    /// Which edge of the window a date is, because a day is a RANGE and
+    /// `2026-07-31` names all of it.
+    enum Edge {
+        case start
+        case end
+    }
+
+    /// `nil` means the field was omitted and resolves straight to
+    /// `fallback` rather than a parse attempt. A PRESENT value still gets
+    /// checked: omitting is trusted, typing something is not.
+    private static func resolveDate(_ text: String?, fallback: Date, edge: Edge) -> Date? {
         guard let text else { return fallback }
-        return parseDate(text)
+        return parseDate(text, edge: edge)
     }
 
-    /// `yyyy-MM-dd` only — the ONE date format the model ever writes,
-    /// always with a year, so unlike the informal dates other tools'
-    /// OUTPUT carries ("on the 1st", "Jul 21"), there is nothing here to
-    /// guess.
-    private static func parseDate(_ text: String) -> Date? {
-        try? Date(text, strategy: .iso8601.year().month().day())
+    /// `yyyy-MM-dd` in the CURRENT CALENDAR, with an end date meaning the
+    /// last moment of its day.
+    ///
+    /// This was `Date(text, strategy: .iso8601.year().month().day())`, and
+    /// it was wrong twice over. MEASURED: "how much did i spnd at walmart
+    /// last mnth" resolved the window correctly to 2026-07-01 to
+    /// 2026-07-31 and then returned two of the three July charges — the
+    /// $73.45 on the 31st was silently dropped.
+    ///
+    /// `.iso8601` reads a bare date as MIDNIGHT UTC. So the end of the
+    /// window landed at the first instant of its final day and excluded
+    /// everything that happened during it, and the start landed 5½ hours
+    /// into the day in a UTC+5:30 zone, which can drop an early
+    /// transaction at the other edge. `DateRangeTool` computes both edges
+    /// correctly — 00:00:00 and 23:59:59 in the calendar's own zone — and
+    /// all of that precision is thrown away by rendering to `yyyy-MM-dd`
+    /// and parsing it back. This restores it on the way in.
+    ///
+    /// A dropped transaction is the worst shape of wrong: the total is
+    /// smaller, every figure in it is real, and nothing anywhere says a
+    /// row is missing.
+    private static func parseDate(_ text: String, edge: Edge) -> Date? {
+        let parts = text.trimmingCharacters(in: .whitespaces).split(separator: "-")
+        guard parts.count == 3,
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
+              let startOfDay = Calendar.current.date(
+                from: DateComponents(year: year, month: month, day: day)
+              )
+        else { return nil }
+
+        guard edge == .end else { return startOfDay }
+        guard let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: startOfDay) else {
+            return startOfDay
+        }
+        return nextDay.addingTimeInterval(-1)
     }
 }
 
@@ -581,6 +624,7 @@ enum BankToolRegistry {
         case "get_dispute_status": DisputeStatusTool(client: client)
         case "branch_hours": BranchHoursTool(client: client)
         case "interest_earned": InterestEarnedTool(client: client)
+        case "resolve_date_range": DateRangeTool()
         case "calculator": CalculatorTool()
         default: nil
         }

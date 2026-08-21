@@ -250,12 +250,22 @@ enum AgentPrompt {
         particular — "what fees did I pay", "my card limits" — it is \
         asking for all of them, and all of them is the answer.
 
-        Call each tool ONCE. When it takes a parameter that covers \
-        everything asked for — "all" rather than one account at a time — \
-        use that instead of calling the same tool again with a different \
-        value. MEASURED: "what's my account balance" produced three \
+        Never call a tool twice for values ONE call already covers. When a \
+        parameter has an `all` that takes in everything asked for, use it \
+        rather than calling the same tool once per account or once per \
+        card. MEASURED: "what's my account balance" produced three \
         separate account_balance calls where one with "all" returns the \
         same three figures, tripling the wait before a word appears.
+
+        THAT IS NOT A LIMIT OF ONE CALL PER TOOL, and it used to be \
+        written as one. Some questions need the same tool several times, \
+        because they ask about several things and the tool answers about \
+        one at a time: "Starbucks this month versus last month" is two \
+        searches over two different windows, and no single call covers \
+        both. Call a tool as many times as the question has cases, and \
+        keep each result with the case it belongs to. What is forbidden is \
+        the second call that comes back with what the first one already \
+        gave you.
 
         Never work out a total, a difference, or a percentage, and never \
         report a figure you arrived at yourself — only figures a tool \

@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "What did I spend at Starbucks?",
+    "expectedTools": ["search_transactions", "calculator"],
+    "expectedTotal": "77.95"
+  },
+  {
+    "prompt": "How much did I spend at Walmart?",
+    "expectedTools": ["search_transactions", "calculator"],
+    "expectedTotal": "371.70"
+  }
+]

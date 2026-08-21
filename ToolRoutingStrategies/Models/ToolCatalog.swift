@@ -18,18 +18,26 @@ enum ToolCatalog {
         ToolDefinition(
             displayName: "search_transactions",
             category: .transactions,
-            description: "Search the user's past transactions by merchant, spending category, account, and date range — including how much they spent at a store or service, or on a category like dining or subscriptions.",
-            notFor: "a general recent listing with no merchant, category, or date range in mind (use list_transactions)",
-            argumentHint: "any of: a merchant name (e.g. 'Starbucks'), a spending category, an account, and a date range as yyyy-MM-dd, worked out from today's date; every one of these is optional — omit whichever the question doesn't name",
+            description: "Search the user's past transactions by merchant, spending category, account, and date range. Takes the start and end dates from resolve_date_range, so resolve_date_range has to run first. Returns each matching transaction on its own — it does NOT add them up, so a question asking how much was spent in total needs calculator too.",
+            notFor: "a general recent listing with no merchant or category in mind (use list_transactions), or a total across the matching transactions (that's calculator, on the figures this tool returns)",
+            argumentHint: "the two dates from resolve_date_range, plus any of: a merchant name (e.g. 'Starbucks'), a spending category, an account — omit whichever the question doesn't name",
+            // The PERIOD phrasings are deliberately NOT here — they are
+            // resolve_date_range's examples now, the same way the ATM
+            // phrasings belong to get_location. Both tools are retrieved
+            // by a spending question either way; splitting the vectors is
+            // what stops one of them being crowded out of the shortlist.
             exampleQueries: [
-                "What did I spend at Starbucks?", "Show my Amazon purchases", "What did I spend on dining last month?",
+                "(step 2 of, after resolve_date_range) What did I spend at Starbucks?",
+                "(step 2 of, after resolve_date_range) What did I spend on dining last month?",
+                "What did I spend at Starbucks?", "Show my Amazon purchases",
                 "spent at starbucks", "starbucks charges", "amazon spend",
                 "how much did i spend at", "what did i spend at a shop", "spending at a merchant",
                 "charges from a store", "how much have i spent there", "purchases from a company",
                 "how much did i spend on groceries", "subscriptions spend this month", "dining vs groceries last month"
             ],
             icon: "magnifyingglass",
-            color: .gray
+            color: .gray,
+            requires: .tool("resolve_date_range")
         ),
         ToolDefinition(
             displayName: "routing_number",
@@ -145,7 +153,8 @@ enum ToolCatalog {
                 "nearest branch", "branch near me", "Where's the closest branch?"
             ],
             icon: "mappin.and.ellipse",
-            color: .red
+            color: .red,
+            requires: .tool("get_location")
         ),
         ToolDefinition(
             displayName: "find_nearest_atm",
@@ -166,7 +175,8 @@ enum ToolCatalog {
                 "nearest atm", "closest atm", "atm near me", "Find the nearest ATM"
             ],
             icon: "dollarsign.square",
-            color: .yellow
+            color: .yellow,
+            requires: .tool("get_location")
         ),
         ToolDefinition(
             displayName: "fees_and_charges",
@@ -339,7 +349,8 @@ enum ToolCatalog {
                 "Branch opening hours", "branch timings", "main st branch hours"
             ],
             icon: "clock",
-            color: .brown
+            color: .brown,
+            requires: .tool("find_nearest_branch")
         ),
         ToolDefinition(
             displayName: "interest_earned",
@@ -360,18 +371,60 @@ enum ToolCatalog {
             color: .green
         ),
         ToolDefinition(
+            displayName: "resolve_date_range",
+            category: .utility,
+            description: "Work out the exact start and end dates a spending question covers, from the period it names — \"this month\", \"last month\", \"the last 3 months\", \"June\" — or the whole history when it names none. Call this FIRST for any question about what the user spent. It is the ONLY source of those dates, so search_transactions cannot run without it.",
+            notFor: "a question about where the user is, a branch's opening hours, or any figure at all — this returns two dates and nothing else, so what was spent inside the window is still search_transactions plus calculator",
+            argumentHint: "the period the question names, e.g. 'this month', 'last month', 'the last 3 months', or a month like 'June'; use allTime when the question names no period",
+            // THE SPENDING PHRASINGS, NOT THE PERIOD PHRASINGS, and that
+            // is copied straight from get_location — whose examples are
+            // "nearest atm" and "atm near me" rather than anything about
+            // location, so the query that retrieves find_nearest_atm
+            // retrieves it too. MEASURED: "Where's the nearest ATM?"
+            // returns both in the top five.
+            //
+            // This entry used to read "this month", "last month", "the
+            // last 3 months". Nobody asks that. They ask "last two months
+            // starbucks spend", which scored search_transactions 0.75,
+            // calculator 0.75, reward_points 0.72 and left this tool out
+            // of the shortlist entirely — so Stage 2 could not name it,
+            // and search_transactions ran alone and invented the window.
+            //
+            // The first two reach the selection prompt, which caps at
+            // two, so the model READS the dependency; the rest are vectors
+            // for retrieval, one per period the tool accepts and one per
+            // way a spending question is worded.
+            exampleQueries: [
+                "(step 1 of) How much did I spend at Starbucks this month?",
+                "(step 1 of) starbucks spend last two months",
+                "how much did i spend at a shop", "what did i spend on groceries",
+                "spending last month", "spend this month", "what did i spend this week",
+                "spend last week", "what did i spend this year", "spending last year",
+                "what did i spend today", "what did i spend yesterday",
+                "spending over the last 3 months", "spend in the last 30 days",
+                "spending in the past two weeks", "what did i spend in June",
+                "spending in December", "starbucks spend this month vs last month",
+                "amazon spend last month", "dining spend last month", "what did i spend"
+            ],
+            icon: "calendar",
+            color: .blue,
+            promptExample: "How much did I spend at Starbucks this month?"
+        ),
+        ToolDefinition(
             displayName: "calculator",
             category: .utility,
             description: "Calculate a figure from numbers other tools have already returned: a total, an average, a difference, a percentage, a product, a quotient, the largest or smallest of a set, or a two-way comparison.",
             notFor: "fetching a figure no other tool has returned yet — this tool only computes from numbers already looked up, it cannot look up anything itself",
             argumentHint: "what to calculate (sum, average, difference, percentage, multiply, divide, max, or min) and the figures to use, copied exactly from another tool's result",
             exampleQueries: [
-                "How much more did I spend at Starbucks than at Walmart?", "What's my average spend over the last three months?",
-                "Is my checking balance enough to cover my rent?",
-                "starbucks vs walmart spend", "avg spend last 3 months", "which month did i spend the most"
+                "How much did I spend at Amazon in total?", "How much more did I spend at Starbucks than at Walmart?",
+                "What's my average spend over the last three months?", "Is my checking balance enough to cover my rent?",
+                "starbucks vs walmart spend", "avg spend last 3 months", "which month did i spend the most",
+                "how much did i spend at", "how much have i spent this month"
             ],
             icon: "plus.forwardslash.minus",
-            color: .indigo
+            color: .indigo,
+            requires: .anyRoutedTool
         )
     ]
 
@@ -380,4 +433,50 @@ enum ToolCatalog {
     static let byName: [String: ToolDefinition] = Dictionary(
         uniqueKeysWithValues: all.map { ($0.displayName, $0) }
     )
+
+    // MARK: - Plan repair
+
+    /// The plan the router named, plus every prerequisite those tools
+    /// need, each one ahead of the tool that needs it.
+    ///
+    /// This is the rule that used to be prose. "find the nearest ATM"
+    /// needs get_location, and "what time does the Main St branch close"
+    /// needs get_location and find_nearest_branch before branch_hours —
+    /// the router is still asked for those, and the instructions still
+    /// explain them, but a plan that arrives short is now completed here
+    /// instead of being executed broken.
+    ///
+    /// Prerequisites are added whether or not retrieval shortlisted them:
+    /// a tool that cannot run without another does not become able to when
+    /// a similarity search ranks that other one sixth.
+    static func closure(over planned: [String]) -> [String] {
+        var ordered: [String] = []
+        var seen = Set<String>()
+
+        func add(_ name: String) {
+            guard !seen.contains(name) else { return }
+            seen.insert(name)
+            // The prerequisite is appended FIRST, so the list reads in the
+            // order the tools have to run. `seen` is marked before
+            // recursing, so a dependency cycle terminates instead of
+            // recursing forever.
+            if let definition = byName[name], case .tool(let prerequisite) = definition.requires {
+                add(prerequisite)
+            }
+            ordered.append(name)
+        }
+
+        planned.forEach(add)
+
+        // A tool that computes from figures needs SOMETHING to have
+        // fetched them. MEASURED: the router returned a plan of two
+        // utilities — a date window and a sum — with nothing to apply
+        // either to. A plan of calculator alone has no named prerequisite
+        // to add and is not runnable, so dropping it empties the plan and
+        // escalates. That is the honest outcome, and better than a session
+        // bound to nothing but arithmetic.
+        let fetchesSomething = ordered.contains { byName[$0]?.requires != .anyRoutedTool }
+        guard !fetchesSomething else { return ordered }
+        return ordered.filter { byName[$0]?.requires != .anyRoutedTool }
+    }
 }
